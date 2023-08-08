@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from models.LombScargle import MyLombScargleModel
+from models.Clustering import viz_PCA, viz_TSNE
 import matplotlib.pyplot as plt
 
 if __name__ == "__main__":
@@ -14,11 +15,16 @@ if __name__ == "__main__":
     #x,y = sample_img_points(img, n_points, plot=True)
     x = np.load("./data/point_positions.npy")
     y = np.load("./data/point_colors.npy")
+    all_attributes = np.load('./data/point_attributes.npy')
      
     #x, y = generate_1D_random_peroidic_data_square(resolution)
     x = torch.tensor(x, dtype=torch.float32)
     y = torch.tensor(y, dtype=torch.float32)
     print(f"Data: x->f(x) {x.shape} -> {y.shape}")
+    #plt.scatter(x[:,1], x[:,0], c=y, cmap='gray', s=0.1)
+    #plt.show()
+    viz_PCA(all_attributes,color=y)
+    viz_TSNE(all_attributes,color=y)
 
     # Create model
     with torch.no_grad():
@@ -36,7 +42,7 @@ if __name__ == "__main__":
         #new_points = torch.linspace(-2, 2, 1000)
         newx = torch.linspace(x[:,0].min(), x[:,0].max(), 1024)
         newy = torch.linspace(x[:,1].min(), x[:,1].max(), 1024)
-        g = torch.stack(torch.meshgrid([newy, newx], indexing='ij'), dim=-1).reshape(-1, 2).type(torch.float32)
+        g = torch.stack(torch.meshgrid([newx, newy], indexing='ij'), dim=-1).reshape(-1, 2).type(torch.float32)
         
         
         psnrs = []
