@@ -57,3 +57,9 @@ def ssim2D(x, y):
 
 def psnr(x, y, range=1.0):
     return 20*torch.log10(range) - 10*torch.log10(((y-x)**2).sum())
+
+def to_img(x):
+    x_img = x.clone().detach().cpu().numpy() * 255
+    x_img = np.clip(x_img, 0, 255)
+    x_img = x_img.astype(np.uint8)
+    return x_img

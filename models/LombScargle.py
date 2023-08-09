@@ -228,6 +228,22 @@ class MyLombScargleModel():
         print(f"Extracted {self.peak_idx.shape[0]} peaks.")
         return self.peak_idx
 
+    def get_peak_freq_angles(self):
+        assert self.peak_idx is not None, "Must compute peaks first with find_peaks()"
+
+        if(self.n_dims == 1):
+            freqs = self.modeled_frequencies[self.peak_idx[:,0]]
+            return freqs
+        elif(self.n_dims == 2):
+            freqs = self.modeled_frequencies[self.peak_idx[:,1]]
+            angles = self.modeled_angles[0][self.peak_idx[:,0]]
+            return torch.stack([freqs, angles], dim=-1)
+
+    def get_peak_coeffs(self):
+        assert self.peak_idx is not None, "Must compute peaks first with find_peaks()"
+        coeffs = self.wave_coefficients[self.peak_idx[:,0], self.peak_idx[:,1],:]
+        return coeffs
+
     def get_num_peaks(self):
         assert self.peak_idx is not None, f"Must find peaks first"
         return self.peak_idx.shape[0]

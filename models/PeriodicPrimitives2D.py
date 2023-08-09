@@ -13,15 +13,26 @@ class PeriodicPrimitives2D(torch.nn.Module):
         self.coeffs = Parameter(((1/n_gaussians)**0.5)*torch.rand([n_gaussians, 2], dtype=torch.float32, device=device))
 
     def init_lombscargle(self, x, y):
-        print(f"Initializing Lomb-Scargle model on training data")
+        print(f"Initializing Lomb-Scargle model on training data...")
         self.ls_model = MyLombScargleModel(x, y, self.freqs.device)
-        self.ls_model
+        self.ls_model.fit(torch.linspace(1., 1024., 1024), 
+                          angles=[torch.linspace(0., torch.pi, 180)], 
+                          linear_in_frequency=True)
+        self.data_periodogram = self.ls_model.get_power()
+        self.ls_model.find_peaks()
+        target_freqsangles = self.ls_model.get_peak_freq_angles()
+        target_coeffs = self.ls_model.get_peak_coeffs()
+        self.freqs = Parameter(target_freqsangles[:,0:1])
+        self.rotations = Parameter(target_freqsangles[:,1:2])
+        self.coeffs = Parameter(target_coeffs)
+        print(self.freqs)
+        print(self.coeffs)
 
     def create_optimizer(self):
         optim = torch.optim.Adam(self.parameters(), lr=0.001, 
             betas=[0.9, 0.99])
         return optim
-
+    
     def create_rotation_matrices(self):
         return torch.stack([torch.cos(self.rotations), -torch.sin(self.rotations),
                              torch.sin(self.rotations), torch.cos(self.rotations)], dim=-1).reshape(-1, 2, 2)
@@ -29,9 +40,7 @@ class PeriodicPrimitives2D(torch.nn.Module):
     def loss(self, x, y):
         # x is our output, y is the ground truth
         model_out = self(x)
-        l1 = torch.nn.functional.mse_loss(model_out,y)
-        ls_model = MyLombScargleModel(x, y)
-        ls_model.fit()
+        l1 = torch.nn.functional.l1_loss(model_out,y)
         return l1, model_out
 
     def forward(self, x):

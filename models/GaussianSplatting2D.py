@@ -9,7 +9,7 @@ class GaussianSplatting2D(torch.nn.Module):
 
         # Parameters
         #self.colors = Parameter(torch.rand([n_gaussians, 1], dtype=torch.float32, device=device))
-        self.alphas = ((1/n_gaussians)**0.5)*Parameter(torch.rand([n_gaussians, 1], dtype=torch.float32, device=device))
+        self.alphas = Parameter(((1/n_gaussians)**0.5)*torch.rand([n_gaussians, 1], dtype=torch.float32, device=device))
         self.means = Parameter(torch.rand([n_gaussians, 2], dtype=torch.float32, device=device))
         # RSSR
         self.rotations = Parameter(torch.pi*torch.rand([n_gaussians, 1], dtype=torch.float32, device=device))
@@ -33,7 +33,7 @@ class GaussianSplatting2D(torch.nn.Module):
     def loss(self, x, y):
         # x is our output, y is the ground truth
         model_out = self(x)
-        l1 = torch.nn.functional.mse_loss(model_out,y)
+        l1 = torch.nn.functional.l1_loss(model_out,y)
         return l1, model_out
     
     def forward(self, x):

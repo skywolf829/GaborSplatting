@@ -6,20 +6,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import imageio.v3 as imageio
 from tqdm import tqdm
+from utils.data_utils import to_img
 
-def to_img(x):
-    x_img = x.clone().detach().cpu().numpy() * 255
-    x_img = np.clip(x_img, 0, 255)
-    x_img = x_img.astype(np.uint8)
-    return x_img
 
 if __name__ == '__main__':
 
-    device = "cpu"
+    device = "cuda"
     torch.random.manual_seed(42)
     np.random.seed(42)
 
-    model = PeriodicPrimitives2D(10, device=device)
+    model = PeriodicPrimitives2D(1000, device=device)
     training_img = load_img("./data/tablecloth_zoom2.jpg")
     training_img_copy = (training_img.copy() * 255).astype(np.uint8)
     og_img_shape = training_img.shape
@@ -30,8 +26,10 @@ if __name__ == '__main__':
                                         dim=-1).reshape(-1, 2).type(torch.float32)
     training_img_colors = torch.tensor(training_img, dtype=torch.float32, device=device).flatten()[:,None]
 
+    model.init_lombscargle(training_img_positions, training_img_colors)
+    
     optim = model.create_optimizer()
-
+    
     training_imgs = []
     
     n_iters = 1000
@@ -43,7 +41,6 @@ if __name__ == '__main__':
         optim.step()
 
         if i % 10 == 0 or i == n_iters-1:
-            #print(f"[{i}/{n_iters}] loss: {l.item():0.04f}")
             to_append = np.concatenate([
                 to_img(model_out).reshape(og_img_shape),
                 training_img_copy
@@ -52,4 +49,4 @@ if __name__ == '__main__':
 
         t.set_description(f"[{i+1}/{n_iters}] loss: {loss.item():0.04f}")
     
-    imageio.imwrite("training_imgs.gif", training_imgs)
+    imageio.imwrite("output/training_imgs.gif", training_imgs)
