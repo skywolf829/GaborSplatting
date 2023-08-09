@@ -56,7 +56,7 @@ def ssim2D(x, y):
     return structural_similarity(x, y)
 
 def psnr(x, y, range=1.0):
-    return 20*torch.log10(range) - 10*torch.log10(((y-x)**2).sum())
+    return 20*np.log10(range) - 10*torch.log10(((y-x)**2).mean())
 
 def to_img(x):
     x_img = x.clone().detach().cpu().numpy() * 255

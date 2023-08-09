@@ -3,6 +3,7 @@ import numpy as np
 from models.LombScargle import MyLombScargleModel
 from models.Clustering import viz_PCA, viz_TSNE
 import matplotlib.pyplot as plt
+from utils.data_generators import load_img, sample_img_points
 
 if __name__ == "__main__":
 
@@ -10,14 +11,14 @@ if __name__ == "__main__":
     torch.random.manual_seed(0)
     n_points = 100000
 
-    device = "cpu"
+    device = "cuda"
     
     # Load data
-    #img = load_img("./data/tablecloth_zoom.jpg")
-    #x,y = sample_img_points(img, n_points, plot=True)
-    x = np.load("./data/point_positions.npy")
-    y = np.load("./data/point_colors.npy")
-    all_attributes = np.load('./data/point_attributes.npy')
+    img = load_img("./data/tablecloth_zoom.jpg")
+    x,y = sample_img_points(img, n_points, plot=True)
+    #x = np.load("./data/point_positions.npy")
+    #y = np.load("./data/point_colors.npy")
+    #all_attributes = np.load('./data/point_attributes.npy')
      
     #x, y = generate_1D_random_peroidic_data_square(resolution)
     x = torch.tensor(x, dtype=torch.float32)
@@ -25,19 +26,21 @@ if __name__ == "__main__":
     print(f"Data: x->f(x) {x.shape} -> {y.shape}")
     #plt.scatter(x[:,1], x[:,0], c=y, cmap='gray', s=0.1)
     #plt.show()
-    viz_PCA(all_attributes,color=y)
-    viz_TSNE(all_attributes,color=y)
+    #viz_PCA(all_attributes,color=y)
+    #viz_TSNE(all_attributes,color=y)
 
     # Create model
     with torch.no_grad():
         ls_model = MyLombScargleModel(x,y, device=device)
-        dist = (x.max(dim=0).values-x.min(dim=0).values).max()
-        frequencies = torch.flip(1/torch.linspace(dist/4096, dist/2, 1024), dims=[0])
+        wavelengths = torch.linspace(1./1024., 1.0, 1024)
+        freqs = (1./wavelengths).flip([0])
         angles = None
         if(x.shape[1] > 1):
             angles = [torch.linspace(0, torch.pi, 180)]
 
-        ls_model.fit(frequencies, angles, perfect_fit=False)
+        ls_model.fit(freqs, angles, 
+                     linear_in_frequency=False, 
+                     perfect_fit=False)
         ls_model.find_peaks()
         ls_model.plot_power()
         

@@ -316,13 +316,11 @@ def load_img(path):
 
 
 def sample_img_points(img, n_points=512, plot=False):
-    x = np.arange(img.shape[1])
-    y = np.arange(img.shape[0])
-    f = RegularGridInterpolator((y, x), img)
-
-    samples = np.random.rand(n_points, 2) * np.array([[img.shape[0]-1, img.shape[1]-1]])
+    g_x = np.arange(0, img.shape[0], dtype=np.float32) / (img.shape[0]-1)
+    g_y = np.arange(0, img.shape[1], dtype=np.float32) / (img.shape[1]-1)
+    f = RegularGridInterpolator((g_x, g_y), img)
+    samples = np.random.rand(n_points, 2)
     interp_data = f(samples)
-
     if(plot):
         plt.imshow(img, cmap="gray")
         #plt.scatter(samples[:,1], -samples[:,0], c=interp_data, cmap='gray')

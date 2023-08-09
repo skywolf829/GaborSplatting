@@ -15,9 +15,11 @@ class PeriodicPrimitives2D(torch.nn.Module):
     def init_lombscargle(self, x, y):
         print(f"Initializing Lomb-Scargle model on training data...")
         self.ls_model = MyLombScargleModel(x, y, self.freqs.device)
-        self.ls_model.fit(torch.linspace(1., 1024., 1024), 
+        wavelengths = torch.linspace(1./1024., 1.0, 1024)
+        freqs = (1./wavelengths).flip([0])
+        self.ls_model.fit(freqs, 
                           angles=[torch.linspace(0., torch.pi, 180)], 
-                          linear_in_frequency=True)
+                          linear_in_frequency=False)
         self.data_periodogram = self.ls_model.get_power()
         self.ls_model.find_peaks()
         target_freqsangles = self.ls_model.get_peak_freq_angles()
@@ -25,8 +27,6 @@ class PeriodicPrimitives2D(torch.nn.Module):
         self.freqs = Parameter(target_freqsangles[:,0:1])
         self.rotations = Parameter(target_freqsangles[:,1:2])
         self.coeffs = Parameter(target_coeffs)
-        print(self.freqs)
-        print(self.coeffs)
 
     def create_optimizer(self):
         optim = torch.optim.Adam(self.parameters(), lr=0.001, 
@@ -48,8 +48,8 @@ class PeriodicPrimitives2D(torch.nn.Module):
         R = self.create_rotation_matrices() # [n_gaussians, 2, 2]
         rel_x = x[:,None,None,:] @ R # [N, n_gaussians, 1, 2]
         # [N n_gaussians, 1]
-        vals = self.coeffs[None,:,0:1]*torch.sin(rel_x[:,:,:,0]*self.freqs[None,...].detach()) + \
-            self.coeffs[None,:,1:2]*torch.cos(rel_x[:,:,:,0]*self.freqs[None,...].detach())
-        vals = vals.sum(dim=1)
+        vals =  self.coeffs[None,:,0:1]*torch.sin(2*torch.pi*rel_x[:,:,:,0]*self.freqs[None,...]) + \
+                self.coeffs[None,:,1:2]*torch.cos(2*torch.pi*rel_x[:,:,:,0]*self.freqs[None,...])
+        vals = self.ls_model.get_offsets()[None,...] + vals.sum(dim=1)
         return vals # [N, channels]
 

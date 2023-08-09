@@ -29,7 +29,6 @@ class MyLombScargleModel():
         self.modeled_frequencies : torch.Tensor = None
         self.modeled_angles : torch.Tensor = None
 
-        self.offsets : torch.Tensor = None
         self.wave_coefficients : torch.Tensor = None
         self.power : torch.Tensor = None
 
@@ -199,8 +198,8 @@ class MyLombScargleModel():
         return self.wave_coefficients
     
     def get_offsets(self):
-        assert self.offsets is not None, f"offsets is none, fit a model first"
-        return self.offsets
+        assert self.y_means is not None, f"offsets is none, fit a model first"
+        return self.y_means
     
     def find_peaks(self):
         assert self.power is not None, f"power is none, fit a model first"
