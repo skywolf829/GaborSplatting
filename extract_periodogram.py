@@ -9,6 +9,8 @@ if __name__ == "__main__":
     np.random.seed(0)
     torch.random.manual_seed(0)
     n_points = 100000
+
+    device = "cpu"
     
     # Load data
     #img = load_img("./data/tablecloth_zoom.jpg")
@@ -28,7 +30,7 @@ if __name__ == "__main__":
 
     # Create model
     with torch.no_grad():
-        ls_model = MyLombScargleModel(x,y, device="cuda")
+        ls_model = MyLombScargleModel(x,y, device=device)
         dist = (x.max(dim=0).values-x.min(dim=0).values).max()
         frequencies = torch.flip(1/torch.linspace(dist/4096, dist/2, 1024), dims=[0])
         angles = None
