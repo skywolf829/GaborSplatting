@@ -309,7 +309,9 @@ def generate_2D_random_peroidic_data_hardest_square(resolution=512, extents=[-5,
     return x, y
 
 def load_img(path):
-    img = imageio.imread(path).astype(np.float32)[:,:,0] / 255.0
+    img = imageio.imread(path).astype(np.float32)/ 255.0
+    #if(len(img.shape) == 3):
+    #    img = img[:,:,0] 
     print(f"Img shape: {img.shape}")
     #img = smooth_signal2D(img, window_size=100)
     return img

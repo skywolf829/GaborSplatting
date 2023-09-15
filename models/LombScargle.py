@@ -4,9 +4,10 @@ import os
 from typing import List
 from time import time
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
+torch.backends.cuda.matmul.allow_tf32 = True
 
 class MyLombScargleModel():
-    def __init__(self, x: torch.Tensor, y:torch.Tensor, device="cuda"):
+    def __init__(self, x: torch.Tensor, y:torch.Tensor, n_terms = 1, device="cuda"):
         if(device == "cuda"):
             assert torch.cuda.is_available(), f"Set device is cuda, but torch.cuda.is_available() = False"
         assert torch.is_tensor(x), f"x is not a tensor"
@@ -19,7 +20,6 @@ class MyLombScargleModel():
         self.device = device
         self.x : torch.Tensor = x.to(device)
         self.y : torch.Tensor = y.to(device)
-        self.y_means : torch.Tensor = y.mean(dim=0).to(device)
 
         self.n_items : int = x.shape[0]
         self.n_dims : int = x.shape[1]
@@ -37,7 +37,7 @@ class MyLombScargleModel():
         self.linear_in_frequency : bool = False
         self.perfect_fit : bool = False
         
-        self.nterms_base = 1
+        self.nterms = n_terms
         self.nterms_band = 1
         self.reg_band = 1e-6
 
@@ -60,9 +60,12 @@ class MyLombScargleModel():
         else:
             print(f"Not supported")
 
-    def generate_waves(self, input, freq):
-        return torch.stack([torch.sin(2 * torch.pi * freq * input), 
-                     torch.cos(2 * torch.pi * freq * input)], dim=-1)
+    def generate_waves(self, v):
+        waves = [torch.ones_like(v)]
+        for i in range(self.nterms):
+            waves += [torch.sin((1+i)*v), torch.cos((1+i)*v)]
+
+        return torch.stack(waves, dim=-1)
 
     def fit_angle(self, angles, idx, chi2, yw):
 
@@ -72,23 +75,22 @@ class MyLombScargleModel():
             R = self.create_rotation_matrix(angle)
             x_r = self.x[:,None,:] @ R[None,...]
             x_r = x_r.squeeze()[:,0]
-        else:
+        elif self.n_dims == 1:
             x_r = self.x[:,0]
         
         # Construct X - design matrix of the stationary sinusoid model
-        X = self.generate_waves(x_r[None,:], freq=self.modeled_frequencies[:,None])
-        
-        XTX = X.mT @ X        
+        # Most time is spent making this.
+        X = self.generate_waves(2*torch.pi*x_r[None,:] * self.modeled_frequencies[:,None])
+        XTX = X.mT @ X
         XTy = X.mT @ yw[None,...]
         # Matrix Algebra to calculate the Lomb-Scargle power at each omega step
-        try:
-            theta_MLE = torch.linalg.solve(XTX, XTy)
-        # If X'X is not invertible, use pseudoinverse instead
-        except torch.linalg.LinAlgError:
-            theta_MLE = torch.linalg.lstsq(XTX, XTy, rcond=None)[0]
+        theta_MLE = torch.linalg.solve(XTX, XTy)
         # update model
-        self.wave_coefficients[idx] = theta_MLE.squeeze()
-        self.power[idx] = ((XTy.mT @ theta_MLE) / chi2).squeeze()
+        self.wave_coefficients[idx] = theta_MLE.mT.reshape(X.shape[0], -1)
+        # chi-squared for power
+        p = (XTy.mT @ theta_MLE)/chi2
+        p = torch.diagonal(p, dim1=-2, dim2=-1).sum(dim=-1)
+        self.power[idx] = p
 
     def fit_angle_perfect(self, angles, idx, chi2, yw):
 
@@ -104,8 +106,7 @@ class MyLombScargleModel():
         for j in range(self.modeled_frequencies.shape[0]):   
             #print(f"[angle {i}/{len(it)}, freq {j}/{frequencies.shape[0]}]")                  
             # Construct X - design matrix of the stationary sinusoid model
-            X.append(self.generate_waves(x_r, freq=self.modeled_frequencies[j]))
-            #X = self.generate_waves(x_r, freq=self.modeled_frequencies[j])
+            X.append(self.generate_waves(2*torch.pi*x_r*self.modeled_frequencies[j]))
         
         X = torch.concat(X, dim=-1)
         XTX = X.t() @ X        
@@ -119,8 +120,8 @@ class MyLombScargleModel():
             theta_MLE = torch.linalg.lstsq(XTX, XTy, rcond=None)[0]
         # update model
         
-        self.wave_coefficients[idx] = theta_MLE.squeeze().reshape(-1, 2)
-        self.power[idx] = (XTy.reshape(-1, 2) @ theta_MLE.reshape(-1, 2).t()).sum(dim=-1) / chi2
+        self.wave_coefficients[idx] = theta_MLE.squeeze().reshape(-1, 3)
+        self.power[idx] = (XTy.reshape(-1, 3) @ theta_MLE.reshape(-1, 3).t()).sum(dim=-1) / chi2
 
     def fit(self, frequencies:torch.Tensor, angles: List[torch.Tensor] = None, linear_in_frequency : bool=False, perfect_fit: bool = False):
         """
@@ -157,14 +158,14 @@ class MyLombScargleModel():
 
         self.modeled_frequencies = frequencies
         self.modeled_angles = angles
-        self.wave_coefficients = torch.empty([*angles_shapes, frequencies.shape[0], 2],
+        self.wave_coefficients = torch.empty([*angles_shapes, frequencies.shape[0], 
+                                              self.n_bands*(2*self.nterms+1)],
                                               device=self.device, dtype=torch.float32)
         self.power = torch.empty([*angles_shapes, frequencies.shape[0]], 
                                  device = self.device, dtype=torch.float32)
 
-
         # Construct weighted y matrix by subtracting means for each band
-        yw = self.y - self.y_means
+        yw = self.y 
 
         # Calculate chi-squared
         chi2 = yw.t() @ yw  # reference chi2 for later comparison
@@ -180,15 +181,13 @@ class MyLombScargleModel():
         fn = self.fit_angle
         if(self.perfect_fit):
             fn = self.fit_angle_perfect
-        start_time = time()
-        
-        for i in range(len(it)):
-            fn(angles, it[i], chi2, yw)
-            
-        torch.cuda.synchronize()
+        start_time = time()        
+        with torch.no_grad():
+            for i in range(len(it)):  
+                fn(angles, it[i], chi2, yw)
         end_time = time()
-        print(f"Fitting took {end_time-start_time:0.02f} sec")
-                
+        #print(f"Fitting took {end_time-start_time:0.02f} sec")
+
     def get_power(self):
         assert self.power is not None, f"power is none, fit a model first"
         return self.power
@@ -197,11 +196,7 @@ class MyLombScargleModel():
         assert self.wave_coefficients is not None, f"wave_coefficients is none, fit a model first"
         return self.wave_coefficients
     
-    def get_offsets(self):
-        assert self.y_means is not None, f"offsets is none, fit a model first"
-        return self.y_means
-    
-    def find_peaks(self):
+    def find_peaks(self, min_influence=1./255., top_n = None, order_by_wavelength=False):
         assert self.power is not None, f"power is none, fit a model first"
         kernel_size = 29
         padding = kernel_size//2
@@ -219,12 +214,25 @@ class MyLombScargleModel():
         sig = torch.nn.functional.pad(self.power[None,None,...], pad=[0, 0, padding, padding], mode='circular')
         sig = torch.nn.functional.pad(sig, pad=[padding, padding, 0, 0], mode='constant', value=-float("Inf"))
         maxes = filter(sig)
-        #criterion = self.power > self.power.mean() + 10*self.power.std()
-        peaks = (self.power == maxes[0,0]) #* criterion
+        criterion = torch.linalg.norm(self.wave_coefficients,dim=-1) > min_influence
+        peaks = (self.power == maxes[0,0]) * criterion
         self.peak_idx = torch.argwhere(peaks)
-        #for i in range(self.peak_idx.shape[0]):
-            #print(f"Peak {i}: {self.peak_idx[i]}. Freq: {self.modeled_frequencies[self.peak_idx[i]]}. Coeffs: {self.wave_coefficients[self.peak_idx[i]]}")
-        print(f"Extracted {self.peak_idx.shape[0]} peaks.")
+        if(self.n_dims == 1):
+            powers = self.power[self.peak_idx[:,0]]
+        elif(self.n_dims == 2):
+            powers = self.power[self.peak_idx[:,0], self.peak_idx[:,1]]
+        
+        if(order_by_wavelength):
+            ordered_power = torch.argsort(self.peak_idx[:,-1], descending=False)
+        else:
+            ordered_power = torch.argsort(powers, descending=True)
+        powers = powers[ordered_power]
+        self.peak_idx = self.peak_idx[ordered_power]
+
+        if top_n is not None:            
+            self.peak_idx = self.peak_idx[0:min(top_n, self.peak_idx.shape[0])]
+            
+        #print(f"Extracted {self.peak_idx.shape[0]} peaks.")
         return self.peak_idx
 
     def get_peak_freq_angles(self):
@@ -240,7 +248,7 @@ class MyLombScargleModel():
 
     def get_peak_coeffs(self):
         assert self.peak_idx is not None, "Must compute peaks first with find_peaks()"
-        coeffs = self.wave_coefficients[self.peak_idx[:,0], self.peak_idx[:,1],:]
+        coeffs = self.wave_coefficients[self.peak_idx[:,0], self.peak_idx[:,1], :]
         return coeffs
 
     def get_num_peaks(self):
@@ -310,15 +318,16 @@ class MyLombScargleModel():
             plt.ylabel(y_label)
             plt.show()
 
-    def transform_from_peaks(self, new_points, top_n_peaks = 10, peaks_to_use = None):
+    def transform_from_peaks(self, new_points, top_n_peaks = None, peaks_to_use = None):
         assert torch.is_tensor(new_points), f"new_points must be a tensor"
         assert self.peak_idx is not None, "peak_idx cannot be None"
         assert self.power is not None, "power cannot be None"
-        assert top_n_peaks > 0, "Must use at least 1 peak"
         if(peaks_to_use is not None):
             for i in range(len(peaks_to_use)):
                 assert peaks_to_use[i] >= 0 and peaks_to_use[i] < self.peak_idx.shape[0]
         new_points = new_points.to(self.device)
+        if(top_n_peaks is None):
+            top_n_peaks = self.peak_idx.shape[0]
         
         if(self.n_dims == 1):
             powers = self.power[self.peak_idx[:,0]]
@@ -331,7 +340,7 @@ class MyLombScargleModel():
         
 
         n_peaks = min(self.peak_idx.shape[0], top_n_peaks) if peaks_to_use is None else len(peaks_to_use)
-        print(f"Using top {n_peaks} peaks for reconstruction.")
+        #print(f"Using top {n_peaks} peaks for reconstruction.")
         for idx in range(n_peaks):
             ind = self.peak_idx[ordered_power[idx] if peaks_to_use is None else ordered_power[peaks_to_use[idx]]]
             if(self.n_dims == 1):
@@ -347,7 +356,7 @@ class MyLombScargleModel():
             else:
                 print("Not implemented yet")
                 quit()
-            X_fit = self.generate_waves(new_points_r[:,0,0], freq)
+            X_fit = self.generate_waves(2*torch.pi*new_points_r[:,0,0]*freq)
             y_fit = (X_fit @ theta_MLE[:,None])
             result += y_fit
         result += self.y_means[None,:]
@@ -370,7 +379,7 @@ class MyLombScargleModel():
                 quit()
 
             
-            X_fit = self.generate_waves(new_points_r, freq)
+            X_fit = self.generate_waves(torch.pi*2*new_points_r * freq)
             y_fit = (X_fit @ theta_MLE[:,None])
             result += y_fit
         result += self.y_means[None,:]
