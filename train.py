@@ -5,6 +5,7 @@ from models.PeriodicGaussians2D import PeriodicGaussians2D
 from models.PeriodicGaussianField import PeriodicGaussianField
 from models.SupportedPeriodicPrimitives2D import SupportedPeriodicPrimitives2D
 from models.HaarPrimitives2D import HaarPrimitives2D
+from models.Siren import Siren
 from utils.data_generators import load_img
 import torch
 import matplotlib.pyplot as plt
@@ -13,17 +14,27 @@ import imageio.v3 as imageio
 from tqdm import tqdm
 from utils.data_utils import to_img, psnr
 import time
+from torch.utils.tensorboard import SummaryWriter
+from datetime import datetime
 
 if __name__ == '__main__':
+    
+    total_iters = 30000
+    fine_tune_iters = 5000    
+    total_primitives = 250
+    primitives_per_update = 10
+    iters_per_primitive = int((total_iters-fine_tune_iters) / (total_primitives/primitives_per_update))
+    
+    model_type = GaussianSplatting2D
+    img_name = "tablecloth_gaussians.jpg"
 
     device = "cuda"
     torch.random.manual_seed(42)
     np.random.seed(42)
-    
-    training_img = load_img("./data/synthetic5.jpg")
+    training_img = load_img("./data/"+img_name)
     training_img_copy = (training_img.copy() * 255).astype(np.uint8)
     og_img_shape = training_img.shape
-    model = PeriodicGaussians2D(1, device=device, n_channels=3)
+    model = model_type(total_primitives, device=device, n_channels=3)
 
     g_x = torch.arange(0, og_img_shape[0], dtype=torch.float32, device=device) / (og_img_shape[0]-1)
     g_y = torch.arange(0, og_img_shape[1], dtype=torch.float32, device=device) / (og_img_shape[1]-1)
@@ -55,12 +66,7 @@ if __name__ == '__main__':
     #plt.show()
 
     x = training_img_positions
-    y = training_img_colors
-    print(f"Initializing Lomb-Scargle model on training data...")
-
-    iters_per_wave = 1000
-    waves_per_ls = 1
-    total_iters = int(iters_per_wave*model.n_waves/waves_per_ls)
+    y = training_img_colors - 0.5
     
     num_params = []
 
@@ -68,15 +74,16 @@ if __name__ == '__main__':
     wave_imgs = []
     max_tries = 5
     tries = max_tries
-    
+
     max_ls_points = 2**17
     pct_of_data = max_ls_points / x.shape[0]
+    writer = SummaryWriter(f"./runs/{img_name.split('.')[0]}/{model.__class__.__name__}/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
     t = tqdm(range(total_iters))
     for i in t:
         mask = torch.rand(x.shape[0], device=x.device, dtype=torch.float32) < pct_of_data
 
         # image logging
-        if i % 50 == 0 and i > 0:
+        if i % 500 == 0 and i > 0:
             with torch.no_grad():
                 res = [200, 200]
                 xmin = x.min(dim=0).values
@@ -84,24 +91,31 @@ if __name__ == '__main__':
                 g = [torch.linspace(xmin[i], xmax[i], res[i], device=model.device) for i in range(xmin.shape[0])]
                 g = torch.stack(torch.meshgrid(g, indexing='ij'), dim=-1).flatten(0, -2)
                 img = model(g).reshape(res+[model.n_channels])
-                img = to_img(img)
-                pre_fitting_imgs.append(img)
-                wave_img = model.vis_each_wave(x)
-                wave_imgs.append(wave_img)
+                img = to_img(img+0.5)
+                writer.add_image('reconstruction', img, i, dataformats='HWC')
+                
+                if("Siren" not in model.__class__.__name__):
+                    wave_img = to_img(model.vis_primitives(x)+0.5)                
+                    writer.add_image('primitives', wave_img, i, dataformats='HWC')
 
-        # adding waves
-        if i % iters_per_wave == 0:
-            with torch.no_grad():    
+        # adding primitives
+        if i % iters_per_primitive == 0 and i < total_iters-fine_tune_iters and "Siren" not in model.__class__.__name__:
+            with torch.no_grad():   
+                if i > 0: 
+                    writer.add_scalar("Params vs. PSNR", 
+                                      20*np.log10(1.0) - 10*torch.log10(losses['mse']), 
+                                      model.param_count())
                 residuals = y[mask]
                 if(i>0):
                     residuals -= model(x[mask])
-                #model.prune_gaussians(1./500.)
-                n_extracted_peaks = model.add_next_wave(x[mask],
-                                    residuals,
-                                    n_waves = waves_per_ls,
-                                    n_freqs = 180, 
-                                    freq_decay=1.01**((i//iters_per_wave)*waves_per_ls), 
-                                    min_influence=1./500.)
+                model.prune_primitives(1./500.)
+                n_extracted_peaks = model.add_primitives(
+                                    #x[mask],
+                                    #y[mask],
+                                    #n_freqs = 180, 
+                                    #freq_decay=1.01**((i//iters_per_primitive)*primitives_per_update), 
+                                    #min_influence=1./500.,
+                                    num_to_add = primitives_per_update)
                 if(n_extracted_peaks == 0 and tries == 0):
                     print(f" Stopping wave detection early, no peaks found in {max_tries} iterations.")
                     break
@@ -109,6 +123,8 @@ if __name__ == '__main__':
                     tries -= 1
                 else:
                     tries = max_tries
+                if("Periodic" in model.__class__.__name__):
+                    writer.add_image("Lomb-Scargle", model.ls_plot, i, dataformats="HWC")
         
         #if i % iters_per_wave == 0 and i > 0:
             #with torch.no_grad():
@@ -116,41 +132,52 @@ if __name__ == '__main__':
 
         # actual training step
         model.optimizer.zero_grad()
-        loss, model_out = model.loss(x[mask], y[mask])
-        if (loss.isnan()):
+        losses, model_out = model.loss(x[mask], y[mask])
+        if (losses['final_loss'].isnan()):
             print()
             print(f"Detected loss was NaN.")
             quit()
             
-        loss.backward()
+        losses['final_loss'].backward()
         #print(f"{self.subgaussian_width} {self.subgaussian_width.grad}")
         model.optimizer.step()
-        with torch.no_grad():
-            model.subgaussian_flat_top_power.clamp_(-1, 3)
+        #with torch.no_grad():
+        #    model.subgaussian_flat_top_power.clamp_(-1, 3)
             
-        with torch.no_grad():
-            model.subgaussian_rotation +=  0.005
         # logging
-        with torch.no_grad():             
-            t.set_description(f"[{i+1}/{total_iters}] loss: {loss.item():0.04f}")
+        with torch.no_grad():     
+            writer.add_scalar("Loss", losses['final_loss'].item(), i)     
+            p = 20*np.log10(1.0) - 10*torch.log10(losses['mse'])
+            writer.add_scalar("Train PSNR", p, i)        
+            t.set_description(f"[{i+1}/{total_iters}] PSNR: {p.item():0.04f}")
     #print(p.key_averages().table(
     #    sort_by="self_cuda_time_total", row_limit=-1))
     
-    print(model.colors)
-    imageio.imwrite("output/supported_waves_training_err.mp4", pre_fitting_imgs)
-    imageio.imwrite("output/supported_waves_training.mp4", wave_imgs)
+    
+    #imageio.imwrite("output/supported_waves_training_err.mp4", pre_fitting_imgs)
+    #imageio.imwrite("output/supported_waves_training.mp4", wave_imgs)
     #model.prune_gaussians(1./500.)
-    print(f"Number of extracted waves: {model.gaussian_means.shape[0]}")
-    output = model(x)
-    p = psnr(output,y).item()
-    print(f"Final PSNR: {p:0.02f}")
+    print(f"Number of extracted waves: {model.colors.shape[0]}")
+
+    with torch.no_grad():
+        spot = 0
+        output = torch.empty_like(y)
+        while spot < x.shape[0]:
+            end_spot = min(spot+max_ls_points, x.shape[0])
+            output[spot:end_spot] = model(x[spot:end_spot])
+            spot = end_spot
+
+        p = psnr(output,y).item()
+        print(f"Final PSNR: {p:0.02f}")
     
 
-    err = torch.clamp(((y-output)**2), 0., 1.)
-    print(err.min())
-    print(err.max())
+    err = torch.clamp(((y-output)**2), 0., 1.)**0.5
+    #print(err.min())
+    #print(err.max())
     plt.scatter(x.detach().cpu().numpy()[:,1],
                 -x.detach().cpu().numpy()[:,0],
                 c=err.detach().cpu().numpy().reshape(-1, model.n_channels))
     plt.savefig("./output/supportedperiodicprims_output.png")
 
+    writer.flush()
+    writer.close()

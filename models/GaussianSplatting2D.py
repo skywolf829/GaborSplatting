@@ -10,10 +10,10 @@ torch.backends.cuda.matmul.allow_tf32 = True
 
 class GaussianSplatting2D(torch.nn.Module):
 
-    def __init__(self, n_gaussians, n_channels = 1, device="cuda"):
+    def __init__(self, n_primitives, n_channels = 1, device="cuda"):
         super().__init__()
         self.device=device
-        self.n_gaussians = n_gaussians
+        self.n_primitives = n_primitives
         self.n_channels = n_channels
         self.colors = Parameter(torch.empty(0, device=device, dtype=torch.float32))
         self.means = Parameter(torch.empty(0, device=device, dtype=torch.float32))        
@@ -33,6 +33,12 @@ class GaussianSplatting2D(torch.nn.Module):
 
         optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         return optimizer
+    
+    def param_count(self):
+        total = 0
+        for group in self.optimizer.param_groups:           
+            total += group['params'][0].numel()
+        return total
     
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
@@ -75,13 +81,13 @@ class GaussianSplatting2D(torch.nn.Module):
                     optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
 
-    def add_more_gaussians(self,n_gaussians = 10):
+    def add_primitives(self, num_to_add = 10):
 
         new_colors = (0.05) - \
-            0.1*(torch.rand([n_gaussians, self.n_channels], dtype=torch.float32, device=self.device))
-        new_means = torch.rand([n_gaussians, 2], dtype=torch.float32, device=self.device)
-        new_rotations = torch.pi*torch.rand([n_gaussians, 1], dtype=torch.float32, device=self.device)
-        new_scales = 3.-0.5*torch.rand([n_gaussians, 1], dtype=torch.float32, device=self.device).expand(-1, 2)
+            0.1*(torch.rand([num_to_add, self.n_channels], dtype=torch.float32, device=self.device))
+        new_means = torch.rand([num_to_add, 2], dtype=torch.float32, device=self.device)
+        new_rotations = torch.pi*torch.rand([num_to_add, 1], dtype=torch.float32, device=self.device)
+        new_scales = 3.-0.5*torch.rand([num_to_add, 1], dtype=torch.float32, device=self.device).expand(-1, 2)
 
         tensor_dict = {
             "colors": new_colors, 
@@ -96,9 +102,9 @@ class GaussianSplatting2D(torch.nn.Module):
         self.means = updated_params['means']
         self.scales = updated_params['scales']
         self.rotations = updated_params['rotations']
-        return n_gaussians
+        return num_to_add
 
-    def prune_gaussians(self, min_contribution=1./255.):
+    def prune_primitives(self, min_contribution=1./255.):
         if(self.means.shape[0] == 0):
             return
         mask = torch.linalg.norm(self.colors,dim=-1) > min_contribution
@@ -113,7 +119,7 @@ class GaussianSplatting2D(torch.nn.Module):
                 self.scales = updated_params['scales']
                 self.rotations = updated_params['rotations']
 
-    def vis_each_gaussian(self, x, res=[256, 256], power=10):
+    def vis_primitives(self, x, res=[256, 256], power=10):
 
         with torch.no_grad():
             xmin = x.min(dim=0).values
@@ -136,7 +142,7 @@ class GaussianSplatting2D(torch.nn.Module):
             vals = gauss_vals
 
             im_per_row = 4
-            nwaves = max(self.means.shape[0], self.n_gaussians)
+            nwaves = max(self.means.shape[0], self.n_primitives)
             n_cols = min(nwaves, im_per_row)
             n_rows = 1+(nwaves//im_per_row)
             im = torch.zeros([n_rows*res[0], n_cols*res[1], self.n_channels])
@@ -147,14 +153,14 @@ class GaussianSplatting2D(torch.nn.Module):
             for i in range(vals.shape[1]):
 
                 im[row_spot*res[0]:(row_spot+1)*res[0],
-                   col_spot*res[1]:(col_spot+1)*res[1]] = vals[:,i].detach().cpu().reshape(res+[self.n_channels]) + 0.5
+                   col_spot*res[1]:(col_spot+1)*res[1]] = vals[:,i].detach().cpu().reshape(res+[self.n_channels])
 
                 if((i+1) % im_per_row == 0):
                     row_spot += 1
                     col_spot = 0
                 else:
                     col_spot += 1
-        return to_img(im)
+        return im
     
     def train_model(self, x, y, im_shape):
         #self.offset = Parameter(y.mean(dim=0))
@@ -249,11 +255,15 @@ class GaussianSplatting2D(torch.nn.Module):
     def loss(self, x, y):
         # x is our output, y is the ground truth
         model_out = self(x)
-        l1 = torch.nn.functional.mse_loss(model_out,y)
+        mse = torch.nn.functional.mse_loss(model_out,y)
         centering_loss = 0.0001*torch.abs(self.means - 0.5).mean()
         decay_loss = 0.001*torch.abs(self.colors).mean()
-        final_loss = l1 #+ centering_loss
-        return final_loss, model_out
+        final_loss = mse #+ centering_loss
+        losses = {
+            "final_loss": final_loss,
+            "mse": mse
+        }
+        return losses, model_out
     
     def forward(self, x):
         # x is [N, 2]

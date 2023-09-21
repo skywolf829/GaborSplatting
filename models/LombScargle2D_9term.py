@@ -5,8 +5,6 @@ from typing import List
 import numpy as np
 from tqdm import tqdm
 from time import time
-from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.figure import Figure
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -47,12 +45,16 @@ class LombScargle2D():
     def generate_waves(self, x, y):
         x = x[None,...]
         y = y[:,None,...]
-        waves = torch.empty([y.shape[0], x.shape[1], x.shape[2], 5], device=x.device, dtype=torch.float32)
-        waves[...,0] = torch.cos(x)*torch.cos(y)
-        waves[...,1] = torch.cos(x)*torch.sin(y)
-        waves[...,2] = torch.sin(x)*torch.cos(y)
-        waves[...,3] = torch.sin(x)*torch.sin(y)
-        waves[...,4] = 1
+        waves = torch.empty([y.shape[0], x.shape[1], x.shape[2], 9], device=x.device, dtype=torch.float32)
+        waves[...,0] = torch.sin(x)*torch.sin(y)
+        waves[...,1] = torch.sin(x)*torch.cos(y)
+        waves[...,2] = torch.sin(x)
+        waves[...,3] = torch.cos(x)*torch.sin(y)
+        waves[...,4] = torch.cos(x)*torch.cos(y)
+        waves[...,5] = torch.cos(x)
+        waves[...,6] = torch.sin(y)
+        waves[...,7] = torch.cos(y)
+        waves[...,8] = 1
 
         return waves
 
@@ -64,33 +66,40 @@ class LombScargle2D():
         
         assert torch.is_tensor(frequencies), f"frequencies is not a tensor"
         assert frequencies.ndim == 1, f"frequencies should only have 1 dim, found {frequencies.shape}"
-             
+
+        self.peak_idx = None
+        
+        frequencies = frequencies.to(self.device)
+
+        self.modeled_frequencies = frequencies
+        self.wave_coefficients = torch.empty([frequencies.shape[0], 
+                                              frequencies.shape[0], 
+                                              1, 9],
+                                              device=self.device, dtype=torch.float32)
+        self.power = torch.empty([frequencies.shape[0], frequencies.shape[0]], 
+                                 device = self.device, dtype=torch.float32)
+
+        pca_result = torch.pca_lowrank(self.y, center=False)
+        print(pca_result[2])
+        proj_y = self.y @ pca_result[2][:,:1]
+        #plt.scatter(self.x[:,1].cpu().numpy(), -self.x[:,0].cpu().numpy(), 
+        # c=proj_y.cpu().numpy(), cmap="gray")
+        #plt.show()
+        max_col = torch.argmax(proj_y.abs())
+        #self.PCA_color = self.y[max_col]
+        self.PCA_color = pca_result[2][:,:1].flatten()
+        self.avg_color = self.y.mean(dim=0)
+        # Construct weighted y matrix by subtracting means for each band
+        yw = proj_y
+
+        # Calculate chi-squared
+        chi2 = yw.t() @ yw  # reference chi2 for later comparison
+
+        max_system_size = 2**19
+        rows_per_batch = max(1, min(frequencies.shape[0], 
+                        int(frequencies.shape[0]*max_system_size/(frequencies.shape[0]*self.x.shape[0]))))
+        start_time = time()        
         with torch.no_grad():
-            self.peak_idx = None
-            
-            frequencies = frequencies.to(self.device)
-
-            self.modeled_frequencies = frequencies
-            self.wave_coefficients = torch.empty([frequencies.shape[0], 
-                                                frequencies.shape[0], 
-                                                1, 5],
-                                                device=self.device, dtype=torch.float32)
-            self.power = torch.empty([frequencies.shape[0], frequencies.shape[0]], 
-                                    device = self.device, dtype=torch.float32)
-            
-            pca_result = torch.pca_lowrank(self.y, center=False)
-            proj_y = self.y @ pca_result[2][:,:1]
-            
-            self.PCA_color = pca_result[2][:,:1].flatten()
-            # Construct weighted y matrix by subtracting means for each band
-            yw = proj_y
-
-            # Calculate chi-squared
-            chi2 = yw.t() @ yw  # reference chi2 for later comparison
-
-            max_system_size = 2**21
-            rows_per_batch = max(1, min(frequencies.shape[0], 
-                            int(frequencies.shape[0]*max_system_size/(frequencies.shape[0]*self.x.shape[0]))))
             row = 0
             while row < frequencies.shape[0]:         
                 end_row = min(row+rows_per_batch, frequencies.shape[0])   
@@ -115,7 +124,38 @@ class LombScargle2D():
                 p = torch.diagonal(p, dim1=-2, dim2=-1).mean(dim=-1)
                 self.power[row:end_row] = p
                 row = end_row
+        end_time = time()
         #print(f"Fitting took {end_time-start_time:0.02f} sec")
+
+    def to_two_wave_form(self, coeffs):
+        # coeffs [N,channels,9]
+        # represent adsin(x)sin(y)+aesin(x)cos(y)+afcos(x)sin(y)+bdcos(x)cos(y)+...+cf
+        # finds abcdef separated
+        abcdef = torch.empty([coeffs.shape[0], coeffs.shape[1], 6], 
+                            device=self.device, dtype=torch.float32)
+
+        abcdef[:,:,0] = coeffs[:,:,0] / coeffs[:,:,3] 
+        abcdef[:,:,1] = 1
+        abcdef[:,:,2] = coeffs[:,:,6] / coeffs[:,:,3] 
+        abcdef[:,:,3] = coeffs[:,:,3]
+        abcdef[:,:,4] = coeffs[:,:,4]
+        abcdef[:,:,5] = coeffs[:,:,5]
+        return abcdef
+
+    def to_one_wave_form(self, coeffs):
+        # coeffs [N,channels,9]
+        # represent (asin(x)+bcos(x)+c)(dsin(y)+ecos(y)+f)
+        # finds (asin(x+b)+c)(dsin(y+e)+f)
+        abcdef = torch.empty([coeffs.shape[0], coeffs.shape[1], 6], 
+                            device=self.device, dtype=torch.float32)
+        abcdef[:,:,0] = torch.linalg.norm(coeffs[:,:,0:2], dim=-1)
+        abcdef[:,:,1] = torch.atan2(coeffs[:,:,1], coeffs[:,:,0])
+        abcdef[:,:,2] = coeffs[:,:,2]
+        abcdef[:,:,3] = torch.linalg.norm(coeffs[:,:,3:5], dim=-1)
+        abcdef[:,:,4] = torch.atan2(coeffs[:,:,4], coeffs[:,:,3])
+        abcdef[:,:,5] = coeffs[:,:,5]
+
+        return abcdef
     
     def get_power(self):
         assert self.power is not None, f"power is none, fit a model first"
@@ -189,13 +229,9 @@ class LombScargle2D():
         assert self.peak_idx is not None, f"Must find peaks first"
         return self.peak_idx.shape[0]
 
-    def plot_power(self, return_img = False):
+    def plot_power(self):
         assert self.modeled_frequencies is not None, f"Need modeled frequencies"
         assert self.power is not None, f"Requires computed powers"
-
-        fig = Figure(figsize=(5, 4), dpi=100)
-        canvas = FigureCanvasAgg(fig)
-        ax = fig.add_subplot()
 
         if(self.n_dims == 1):
             x_axis = self.modeled_frequencies.clone()
@@ -228,28 +264,17 @@ class LombScargle2D():
             x_width = (x_max-x_min)
             y_height = (y_max-y_min)
 
-            ax.imshow(values.cpu().flip(dims=[0]).numpy(), extent=[x_min, x_max, y_min, y_max], 
+            plt.imshow(values.cpu().flip(dims=[0]).numpy(), extent=[x_min, x_max, y_min, y_height], 
                aspect=x_width/y_height)
-        
             if(self.peak_idx is not None):
                 idx_peaks = self.peak_idx.clone().cpu()
                 x = x_axis[idx_peaks[:,1]]
                 y = y_axis[idx_peaks[:,0]]
-                ax.scatter(x.cpu().numpy(), y.cpu().numpy())
-            
+                plt.scatter(x.cpu().numpy(), y.cpu().numpy())
 
-            ax.set_xlabel(x_label)
-            ax.set_ylabel(y_label)
-            
-            canvas.draw()  # Draw the canvas, cache the renderer
-            s, (width, height) = canvas.print_to_buffer()
-            # Option 2a: Convert to a NumPy array.
-            image = np.frombuffer(s, np.uint8).reshape((height, width, 4)).copy()
-
-            if(return_img):
-                return image
-            else:
-                fig.show()
+            plt.xlabel(x_label)
+            plt.ylabel(y_label)
+            plt.show()
 
     def transform_from_peaks(self, new_points, top_n_peaks = None, peaks_to_use = None):
         assert torch.is_tensor(new_points), f"new_points must be a tensor"
