@@ -81,6 +81,9 @@ class LombScargle2D():
             pca_result = torch.pca_lowrank(self.y, center=False)
             proj_y = self.y @ pca_result[2][:,:1]
             
+            #plt.scatter(self.x[:,1].cpu().numpy(), self.x[:,0].cpu().numpy(), c = proj_y.cpu().numpy(), cmap="gray")
+            #plt.show()
+
             self.PCA_color = pca_result[2][:,:1].flatten()
             # Construct weighted y matrix by subtracting means for each band
             yw = proj_y
@@ -189,6 +192,42 @@ class LombScargle2D():
         assert self.peak_idx is not None, f"Must find peaks first"
         return self.peak_idx.shape[0]
 
+    def get_peak_placement(self, idx):
+        selected_idx = self.peak_idx[idx]
+        x_freq = self.modeled_frequencies[selected_idx[:,0]]
+        y_freq = self.modeled_frequencies[selected_idx[:,1]]
+
+        x_in = self.x[:,0:1]*2*torch.pi*x_freq[None,...]
+        y_in = self.x[:,1:2]*2*torch.pi*y_freq[None,...]
+        
+        coeffs = self.wave_coefficients[selected_idx[:,0], selected_idx[:,1],0]
+        pred = coeffs[None,:,0]*torch.cos(x_in)*torch.cos(y_in) +\
+                coeffs[None,:,1]*torch.cos(x_in)*torch.sin(y_in) +\
+                coeffs[None,:,2]*torch.sin(x_in)*torch.cos(y_in) +\
+                coeffs[None,:,3]*torch.sin(x_in)*torch.sin(y_in) +\
+                coeffs[None,:,4]
+        
+        
+
+        pred = pred[...,None] @ self.PCA_color[None,None,...]
+        err = (pred-self.y[:,None,:])**2
+        err = err.norm(dim=-1)
+        err_max = err.max(dim=0).values
+        err /= err_max[None,...]
+        alignment = 1-err
+        #plt.scatter(self.x[:,1].cpu().numpy(), self.x[:,0].cpu().numpy(),c=alignment[:,1].cpu().numpy(), cmap="gray")
+        #plt.show()
+        avg_pos = (self.x.T @ alignment)/self.x.shape[0]
+        avg_pos = avg_pos.mT
+
+        dists = torch.abs(self.x[:,None,:] - avg_pos[None,...])
+        dists *= alignment[...,None]
+        dists = dists.mean(dim=0)
+        
+        return avg_pos, dists
+
+
+
     def plot_power(self, return_img = False):
         assert self.modeled_frequencies is not None, f"Need modeled frequencies"
         assert self.power is not None, f"Requires computed powers"
@@ -249,7 +288,9 @@ class LombScargle2D():
             if(return_img):
                 return image
             else:
-                fig.show()
+                plt.imshow(image)
+                plt.axis('off')
+                plt.show()
 
     def transform_from_peaks(self, new_points, top_n_peaks = None, peaks_to_use = None):
         assert torch.is_tensor(new_points), f"new_points must be a tensor"

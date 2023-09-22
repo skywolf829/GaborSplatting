@@ -18,21 +18,20 @@ class Siren(torch.nn.Module):
     def __init__(self, n_primitives, n_channels=1, device="cuda"):
         super().__init__()
         # Parameters
-        
-        self.model = tcnn.NetworkWithInputEncoding(
+        self.device=device
+        self.n_channels = n_channels
+        self.model = tcnn.Network(
             2, n_channels,
-            encoding_config={
-                "otype": "Frequency",
-                "n_frequencies": 12
-                },
             network_config={
-                    "otype": "FullyFusedMLP",
+                    "otype": "CutlassMLP",
                     "activation": "Sine",
                     "output_activation": "None",
                     "n_neurons": 32,
                     "n_hidden_layers": 2,                                
                 }
             )
+        
+        self.optimizer = self.create_optimizer()
 
     def create_optimizer(self):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001, eps=1e-15)

@@ -21,12 +21,12 @@ if __name__ == '__main__':
     
     total_iters = 30000
     fine_tune_iters = 5000    
-    total_primitives = 250
-    primitives_per_update = 10
+    total_primitives = 140
+    primitives_per_update = 5
     iters_per_primitive = int((total_iters-fine_tune_iters) / (total_primitives/primitives_per_update))
     
-    model_type = GaussianSplatting2D
-    img_name = "tablecloth_gaussians.jpg"
+    model_type = PeriodicGaussians2D
+    img_name = "tablecloth.jpg"
 
     device = "cuda"
     torch.random.manual_seed(42)
@@ -110,11 +110,11 @@ if __name__ == '__main__':
                     residuals -= model(x[mask])
                 model.prune_primitives(1./500.)
                 n_extracted_peaks = model.add_primitives(
-                                    #x[mask],
-                                    #y[mask],
-                                    #n_freqs = 180, 
-                                    #freq_decay=1.01**((i//iters_per_primitive)*primitives_per_update), 
-                                    #min_influence=1./500.,
+                                    x[mask],
+                                    y[mask],
+                                    n_freqs = 180, 
+                                    freq_decay=1.005**((i//iters_per_primitive)*primitives_per_update), 
+                                    min_influence=1./500.,
                                     num_to_add = primitives_per_update)
                 if(n_extracted_peaks == 0 and tries == 0):
                     print(f" Stopping wave detection early, no peaks found in {max_tries} iterations.")
@@ -157,7 +157,6 @@ if __name__ == '__main__':
     #imageio.imwrite("output/supported_waves_training_err.mp4", pre_fitting_imgs)
     #imageio.imwrite("output/supported_waves_training.mp4", wave_imgs)
     #model.prune_gaussians(1./500.)
-    print(f"Number of extracted waves: {model.colors.shape[0]}")
 
     with torch.no_grad():
         spot = 0
@@ -171,7 +170,10 @@ if __name__ == '__main__':
         print(f"Final PSNR: {p:0.02f}")
     
 
-    err = torch.clamp(((y-output)**2), 0., 1.)**0.5
+        err = torch.clamp(((y-output)**2), 0., 1.)**0.5
+        writer.add_scalar("Params vs. PSNR", 
+                                      p, 
+                                      model.param_count())
     #print(err.min())
     #print(err.max())
     plt.scatter(x.detach().cpu().numpy()[:,1],
@@ -181,3 +183,5 @@ if __name__ == '__main__':
 
     writer.flush()
     writer.close()
+    
+    print(f"Number of extracted waves: {model.colors.shape[0]}")

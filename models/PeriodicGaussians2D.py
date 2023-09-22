@@ -131,12 +131,14 @@ class PeriodicGaussians2D(torch.nn.Module):
         all_frequencies = ls_model.get_peak_freqs()
         coeffs = ls_model.get_peak_coeffs()
 
-        means = 0.5+torch.zeros([n_extracted_peaks,2], device=self.device, dtype=torch.float32)      
-        mats = torch.eye(2, device=self.device, dtype=torch.float32)
+        means, vars = ls_model.get_peak_placement(torch.arange(0,n_extracted_peaks,1,dtype=torch.long,device=self.device))     
+        mats = torch.eye(2, device=self.device, dtype=torch.float32)[None,...].repeat(n_extracted_peaks, 1, 1)
+        mats[:,0,0] = vars[:,0]
+        mats[:,1,1] = vars[:,1]
 
         tensor_dict = {
             "gaussian_means": means, 
-            "gaussian_mats": mats[None,...].repeat(n_extracted_peaks, 1, 1),
+            "gaussian_mats": mats,
             "subgaussian_frequency": all_frequencies,
             "subgaussian_coefficients": coeffs,
             "colors": all_colors
@@ -200,7 +202,7 @@ class PeriodicGaussians2D(torch.nn.Module):
         final_loss = mse #+ shear_loss+ decay_loss
         losses = {
             "final_loss": final_loss,
-            "mse_loss": mse,
+            "mse": mse,
             "shear_loss": shear_loss
         }
         return losses, model_out

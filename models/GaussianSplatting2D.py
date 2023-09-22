@@ -261,7 +261,9 @@ class GaussianSplatting2D(torch.nn.Module):
         final_loss = mse #+ centering_loss
         losses = {
             "final_loss": final_loss,
-            "mse": mse
+            "mse": mse,
+            "decay_loss": decay_loss,
+            "centering_loss": centering_loss
         }
         return losses, model_out
     

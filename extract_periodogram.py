@@ -16,7 +16,7 @@ if __name__ == "__main__":
     device = "cuda"
     
     # Load data
-    img = load_img("./data/tablecloth_gaussians.jpg")
+    img = load_img("./data/synthetic.jpg")
     x,y = sample_img_points(img, n_points, plot=False)
     #x = np.load("./data/point_positions.npy")
     #y = np.load("./data/point_colors.npy")
@@ -40,10 +40,11 @@ if __name__ == "__main__":
         new_img = np.zeros_like(img)
 
         ls_model = LombScargle2D(x,y, n_terms=1, device=device)
-        freqs = torch.linspace(100, 200, 1024)
+        freqs = torch.linspace(0.2, 20, 256)
         ls_model.fit(freqs)
-        ls_model.find_peaks(top_n=50)
-        ls_model.plot_power()
+        n_extracted = ls_model.find_peaks(top_n=4)
+        #ls_model.plot_power()
+        ls_model.get_peak_placement(torch.arange(0, n_extracted, 1, dtype=torch.long, device=device))
         
         peak_coeff = ls_model.get_peak_coeffs()
         peak_freqs = ls_model.get_peak_freqs()
@@ -51,7 +52,7 @@ if __name__ == "__main__":
         color = ls_model.get_PCA_color()[:,None]
     print(f"Peak color { color }")
     print("original peaks")
-    print(peak_coeff)
+    
     xm = 2*torch.pi*peak_freqs[0,0]*g[:,0]
     ym = 2*torch.pi*peak_freqs[0,1]*g[:,1]
     channels = []
