@@ -115,7 +115,7 @@ class PeriodicGaussians2D(torch.nn.Module):
                        num_to_add=1):
         #plt.scatter(x.cpu().numpy()[:,1], x.cpu().numpy()[:,0],c=y.cpu().numpy())
         #plt.show()
-        ls_model = LombScargle2D(x, y-y.mean(dim=0), n_terms=1, device=self.device)
+        ls_model = LombScargle2D(x, y, n_terms=1, device=self.device)
         # Randomize set of wavelengths and freqs to fit in correct range
         freqs = 0.1+torch.sort(freq_decay*64*torch.rand([n_freqs], device=self.device, dtype=torch.float32)).values
         
@@ -125,16 +125,17 @@ class PeriodicGaussians2D(torch.nn.Module):
         n_extracted_peaks = ls_model.find_peaks(top_n=num_to_add, 
                                                 min_influence=min_influence)
         self.ls_plot = ls_model.plot_power(return_img=True)
-        
+        self.ls_power = ls_model.power
         all_colors = ls_model.get_PCA_color()[None,:].repeat(n_extracted_peaks, 1) / n_extracted_peaks
 
         all_frequencies = ls_model.get_peak_freqs()
         coeffs = ls_model.get_peak_coeffs()
 
-        means, vars = ls_model.get_peak_placement(torch.arange(0,n_extracted_peaks,1,dtype=torch.long,device=self.device))     
+        means, vars = ls_model.get_peak_placement(torch.arange(0,n_extracted_peaks,1,dtype=torch.long,device=self.device))
+        means = means*0 + 0.5  
         mats = torch.eye(2, device=self.device, dtype=torch.float32)[None,...].repeat(n_extracted_peaks, 1, 1)
-        mats[:,0,0] = vars[:,0]
-        mats[:,1,1] = vars[:,1]
+        #mats[:,0,0] = 1 / vars[:,0]
+        #mats[:,1,1] = 1 / vars[:,1]
 
         tensor_dict = {
             "gaussian_means": means, 
@@ -217,6 +218,7 @@ class PeriodicGaussians2D(torch.nn.Module):
         # [N, n_gaussians, 2, 1] x [1, n_gaussians, 2, 2] x [N, n_gaussians, 2, 1]
         #transformed_x = rel_x[...,None].mT @ cov[None,...] @ rel_x[...,None]
         transformed_x = ((rel_x[...,None].mT @ cov[None,...])**10).sum(dim=-1, keepdim=True)
+        #transformed_x = rel_x[...,None].mT @ cov[None,...] @ cov[None,...].mT @ rel_x[...,None]
         # [N, n_gaussians, 1, 1]
         gauss_vals = torch.exp(-(transformed_x[:,:,0])/2)
         

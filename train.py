@@ -66,7 +66,7 @@ if __name__ == '__main__':
     #plt.show()
 
     x = training_img_positions
-    y = training_img_colors - 0.5
+    y = training_img_colors 
     
     num_params = []
 
@@ -91,11 +91,11 @@ if __name__ == '__main__':
                 g = [torch.linspace(xmin[i], xmax[i], res[i], device=model.device) for i in range(xmin.shape[0])]
                 g = torch.stack(torch.meshgrid(g, indexing='ij'), dim=-1).flatten(0, -2)
                 img = model(g).reshape(res+[model.n_channels])
-                img = to_img(img+0.5)
+                img = to_img(img)
                 writer.add_image('reconstruction', img, i, dataformats='HWC')
                 
                 if("Siren" not in model.__class__.__name__):
-                    wave_img = to_img(model.vis_primitives(x)+0.5)                
+                    wave_img = to_img(model.vis_primitives(x))                
                     writer.add_image('primitives', wave_img, i, dataformats='HWC')
 
         # adding primitives
@@ -111,11 +111,17 @@ if __name__ == '__main__':
                 model.prune_primitives(1./500.)
                 n_extracted_peaks = model.add_primitives(
                                     x[mask],
-                                    y[mask],
+                                    residuals,
                                     n_freqs = 180, 
-                                    freq_decay=1.005**((i//iters_per_primitive)*primitives_per_update), 
+                                    freq_decay=1.01**((i//iters_per_primitive)*primitives_per_update), 
                                     min_influence=1./500.,
                                     num_to_add = primitives_per_update)
+                writer.add_scalar("Max LS power", 
+                                      model.ls_power.max(), 
+                                      i)
+                writer.add_scalar("Min LS power", 
+                                      model.ls_power.min(), 
+                                      i)
                 if(n_extracted_peaks == 0 and tries == 0):
                     print(f" Stopping wave detection early, no peaks found in {max_tries} iterations.")
                     break

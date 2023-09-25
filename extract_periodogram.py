@@ -11,12 +11,12 @@ if __name__ == "__main__":
 
     np.random.seed(0)
     torch.random.manual_seed(0)
-    n_points = 100000
+    n_points = 10000
 
     device = "cuda"
     
     # Load data
-    img = load_img("./data/synthetic.jpg")
+    img = load_img("./data/synthetic10.jpg")
     x,y = sample_img_points(img, n_points, plot=False)
     #x = np.load("./data/point_positions.npy")
     #y = np.load("./data/point_colors.npy")
@@ -40,12 +40,12 @@ if __name__ == "__main__":
         new_img = np.zeros_like(img)
 
         ls_model = LombScargle2D(x,y, n_terms=1, device=device)
-        freqs = torch.linspace(0.2, 20, 256)
+        freqs = torch.linspace(0.2, 24, 128)
         ls_model.fit(freqs)
         n_extracted = ls_model.find_peaks(top_n=4)
-        #ls_model.plot_power()
-        ls_model.get_peak_placement(torch.arange(0, n_extracted, 1, dtype=torch.long, device=device))
-        
+        ls_model.plot_power()
+        means, vars = ls_model.get_peak_placement(torch.arange(0, n_extracted, 1, dtype=torch.long, device=device))
+        print(f"Wave positions {means} {vars}")
         peak_coeff = ls_model.get_peak_coeffs()
         peak_freqs = ls_model.get_peak_freqs()
         peak_power = ls_model.get_peak_power()
@@ -63,7 +63,7 @@ if __name__ == "__main__":
             peak_coeff[0,i,3]*torch.sin(xm)*torch.sin(ym) + \
             peak_coeff[0,i,4]
         channels.append(chan)
-    rgb = torch.stack(channels, dim=-1) @ color.mT
+    rgb = torch.stack(channels, dim=-1) @ color.mT 
     rgb = rgb.reshape(img.shape[0], img.shape[1], rgb.shape[-1])
     plt.imshow(rgb.cpu().numpy())
     plt.show()

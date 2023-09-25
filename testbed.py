@@ -312,4 +312,27 @@ def thing11():
           
      imageio.imwrite("./output/sines.gif", imgs)
 
-thing11()
+def thing12():
+     x = np.linspace(-5., 5., 128)
+     y = np.linspace(-5., 5., 128)
+     g = np.stack(np.meshgrid(y,x, indexing='ij'), axis=-1)
+
+     img = np.zeros([256, 256, 3])
+     img[0:128,128:256,0:2] = (0.5+0.5*np.sin(g[:,:,0]*0.1*2*np.pi)*np.cos(g[:,:,1]*0.2*2*np.pi))[:,:,None]
+     img[0:128,0:128,0:2] = (0.5+0.5*np.sin(g[:,:,0]*.6*2*np.pi)*np.cos(g[:,:,1]*0.3*2*np.pi))[:,:,None]
+     img[128:256,0:128,0:2] = (0.5+0.5*np.sin(g[:,:,0]*0.4*2*np.pi)*np.cos(g[:,:,1]*0.65*2*np.pi))[:,:,None]
+     img[128:256,128:256,0:2] = (0.5+0.5*np.sin(g[:,:,0]*1.0*2*np.pi)*np.cos(g[:,:,1]*0.3*2*np.pi))[:,:,None]
+
+     imageio.imwrite("synthetic10.jpg", (img*255).astype(np.uint8))
+
+def thing13():
+     x = np.linspace(-5., 5., 128)
+     y = np.linspace(-5., 5., 128)
+     g = np.stack(np.meshgrid(y,x, indexing='ij'), axis=-1)
+
+     img = np.zeros([256, 256, 3])
+     img[0:128,128:256,0:3] = (0.5+0.5*np.sin(g[:,:,0]*0.1*2*np.pi)*np.cos(g[:,:,1]*0.2*2*np.pi))[:,:,None]
+
+     imageio.imwrite("synthetic11.jpg", (img*255).astype(np.uint8))
+
+thing13()

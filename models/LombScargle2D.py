@@ -194,8 +194,8 @@ class LombScargle2D():
 
     def get_peak_placement(self, idx):
         selected_idx = self.peak_idx[idx]
-        x_freq = self.modeled_frequencies[selected_idx[:,0]]
-        y_freq = self.modeled_frequencies[selected_idx[:,1]]
+        x_freq = self.modeled_frequencies[selected_idx[:,1]]
+        y_freq = self.modeled_frequencies[selected_idx[:,0]]
 
         x_in = self.x[:,0:1]*2*torch.pi*x_freq[None,...]
         y_in = self.x[:,1:2]*2*torch.pi*y_freq[None,...]
@@ -208,22 +208,30 @@ class LombScargle2D():
                 coeffs[None,:,4]
         
         
+        show_peak = 1
+        #plt.scatter(self.x[:,1].cpu().numpy(), -self.x[:,0].cpu().numpy(),c=pred[:,show_peak].cpu().numpy(), cmap="gray")
+        #plt.show()
 
         pred = pred[...,None] @ self.PCA_color[None,None,...]
-        err = (pred-self.y[:,None,:])**2
+        err = pred-self.y[:,None,:]
         err = err.norm(dim=-1)
-        err_max = err.max(dim=0).values
-        err /= err_max[None,...]
-        alignment = 1-err
-        #plt.scatter(self.x[:,1].cpu().numpy(), self.x[:,0].cpu().numpy(),c=alignment[:,1].cpu().numpy(), cmap="gray")
+        #plt.scatter(self.x[:,1].cpu().numpy(), -self.x[:,0].cpu().numpy(),c=err[:,show_peak].cpu().numpy(), cmap="coolwarm")
         #plt.show()
-        avg_pos = (self.x.T @ alignment)/self.x.shape[0]
+        #err -= err.min(dim=0).values[None,...]
+        #err /= err.max(dim=0).values[None,...]
+        
+        #print(self.x.shape)
+        #print(err.shape)
+        avg_pos = (self.x.T @ err**4)/(err**4).sum(dim=0, keepdim=True)
         avg_pos = avg_pos.mT
 
         dists = torch.abs(self.x[:,None,:] - avg_pos[None,...])
-        dists *= alignment[...,None]
-        dists = dists.mean(dim=0)
+        dists = (dists.permute(1,2,0) @ (1-err).mT[...,None])[:,:,0] / (1-err).sum(dim=0, keepdim=True).mT
         
+        #plt.scatter(self.x[:,1].cpu().numpy(), -self.x[:,0].cpu().numpy(),c=self.y.cpu().numpy())
+        #plt.scatter(avg_pos[:,1].cpu().numpy(), -avg_pos[:,0].cpu().numpy(),color=[1.,0,0], alpha=1.)#, s=dists.norm(dim=1).cpu().numpy())
+        #plt.show()
+
         return avg_pos, dists
 
 
