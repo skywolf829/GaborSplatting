@@ -4,6 +4,7 @@ from models.HybridPrimitiveModel import HybridPrimitiveModel
 from models.PeriodicGaussians2D import PeriodicGaussians2D
 from models.PeriodicGaussianField import PeriodicGaussianField
 from models.SupportedPeriodicPrimitives2D import SupportedPeriodicPrimitives2D
+from models.PeriodicGaussians2Dfreqangle import PeriodicGaussians2Dfreqangle
 from models.HaarPrimitives2D import HaarPrimitives2D
 from models.Siren import Siren
 from utils.data_generators import load_img
@@ -21,11 +22,11 @@ if __name__ == '__main__':
     
     total_iters = 30000
     fine_tune_iters = 5000    
-    total_primitives = 140
+    total_primitives = 180
     primitives_per_update = 5
     iters_per_primitive = int((total_iters-fine_tune_iters) / (total_primitives/primitives_per_update))
     
-    model_type = PeriodicGaussians2D
+    model_type = PeriodicGaussians2Dfreqangle
     img_name = "tablecloth.jpg"
 
     device = "cuda"
@@ -112,7 +113,8 @@ if __name__ == '__main__':
                 n_extracted_peaks = model.add_primitives(
                                     x[mask],
                                     residuals,
-                                    n_freqs = 180, 
+                                    n_freqs = 150, 
+                                    n_angles = 180,
                                     freq_decay=1.01**((i//iters_per_primitive)*primitives_per_update), 
                                     min_influence=1./500.,
                                     num_to_add = primitives_per_update)

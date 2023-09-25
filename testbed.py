@@ -335,4 +335,26 @@ def thing13():
 
      imageio.imwrite("synthetic11.jpg", (img*255).astype(np.uint8))
 
-thing13()
+def thing14():
+     x = np.linspace(-5., 5., 2048)
+     y = np.sin(x*2*np.pi*3.5)
+
+     errs = []
+     freqs = []
+     for f in np.linspace(0, 6., 1024):
+          freqs.append(f)
+          y_prime = np.sin(x*2*np.pi*f)
+          err = ((y-y_prime)**2).mean()**0.5
+          errs.append(err)
+     
+     plt.plot(freqs,errs)
+     plt.xlabel("Tested frequency")
+     plt.ylabel("RMSE")
+     plt.title("Loss landscape")
+     plt.show()
+
+     plt.plot(x, y)
+     plt.title("Original wave, f=3.5")
+     plt.show()
+     
+thing14()

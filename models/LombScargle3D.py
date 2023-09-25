@@ -10,7 +10,7 @@ from matplotlib.figure import Figure
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 torch.backends.cuda.matmul.allow_tf32 = True
 
-class LombScargle2D():
+class LombScargle3D():
     def __init__(self, x: torch.Tensor, y:torch.Tensor, n_terms = 1, device="cuda"):
         if(device == "cuda"):
             assert torch.cuda.is_available(), f"Set device is cuda, but torch.cuda.is_available() = False"
@@ -19,7 +19,7 @@ class LombScargle2D():
         assert x.ndim == 2, f"x requires 2 dimensions but found |{x.shape}|={x.ndim}"
         assert y.ndim == 2, f"y requires 2 dimensions but found |{y.shape}|={y.ndim}"
         assert y.shape[0] == x.shape[0], f"Dimension 0 of x and y should be the same. Found x:{x.shape[0]}, y:{y.shape[0]}"
-        assert x.shape[1] == 1 or x.shape[1] == 2 or x.shape[1] == 3, f"Only supports 1D, 2D, and 3D, not {x.shape[1]}-D"
+        assert x.shape[1] == 3, f"Only supports 3D, not {x.shape[1]}-D"
 
         self.device = device
         self.x : torch.Tensor = x.to(device)
@@ -47,16 +47,14 @@ class LombScargle2D():
     def generate_waves(self, x, y):
         x = x[None,...]
         y = y[:,None,...]
-        waves = torch.empty([y.shape[0], x.shape[1], x.shape[2], 5], device=x.device, dtype=torch.float32)
-        waves[...,0] = torch.cos(x)*torch.cos(y)
-        waves[...,1] = torch.cos(x)*torch.sin(y)
-        waves[...,2] = torch.sin(x)*torch.cos(y)
-        waves[...,3] = torch.sin(x)*torch.sin(y)
-        waves[...,4] = 1
+        waves = torch.empty([y.shape[0], x.shape[1], x.shape[2], 3], device=x.device, dtype=torch.float32)
+        waves[...,0] = torch.cos(x)
+        waves[...,1] = torch.sin(x)
+        waves[...,2] = 1
 
         return waves
-
-    def fit(self, frequencies:torch.Tensor):
+    
+    def fit(self, frequencies:torch.Tensor, angles:torch.Tensor):
         """
         Fits the model to each frequency in frequencies.
         Also fits angles, which are given as a list of angles in theta, phi order.
@@ -72,10 +70,11 @@ class LombScargle2D():
 
             self.modeled_frequencies = frequencies
             self.wave_coefficients = torch.empty([frequencies.shape[0], 
-                                                frequencies.shape[0], 
-                                                1, 5],
+                                                angles.shape[0], 
+                                                angles.shape[0],
+                                                1, 3],
                                                 device=self.device, dtype=torch.float32)
-            self.power = torch.empty([frequencies.shape[0], frequencies.shape[0]], 
+            self.power = torch.empty([frequencies.shape[0], angles.shape[0], angles.shape[0]], 
                                     device = self.device, dtype=torch.float32)
             
             pca_result = torch.pca_lowrank(self.y, center=False)
@@ -90,6 +89,11 @@ class LombScargle2D():
 
             # Calculate chi-squared
             chi2 = yw.t() @ yw  # reference chi2 for later comparison
+
+            # Convert to spherical for rotations
+            r = torch.linalg.norm(self.x, dim=-1)
+            theta = torch.arccos(self.x[:,2]/(r+1e-8))
+            phi = torch.sign(self.x[:,1])*torch.arccos(self.x[:,0]/torch.linalg.norm(self.x[:,0:2], dim=-1))
 
             max_system_size = 2**21
             rows_per_batch = max(1, min(frequencies.shape[0], 

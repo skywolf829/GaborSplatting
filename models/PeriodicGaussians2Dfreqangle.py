@@ -14,7 +14,7 @@ from utils.data_utils import psnr
 import tinycudann as tcnn
 torch.backends.cuda.matmul.allow_tf32 = True
 
-class PeriodicGaussians2D(torch.nn.Module):
+class PeriodicGaussians2Dfreqangle(torch.nn.Module):
 
     def __init__(self, n_primitives, n_channels=1, device="cuda"):
         super().__init__()
@@ -28,6 +28,7 @@ class PeriodicGaussians2D(torch.nn.Module):
 
         self.subgaussian_frequency = Parameter(torch.empty(0, device=device, dtype=torch.float32))    
         self.subgaussian_coefficients = Parameter(torch.empty(0, device=device, dtype=torch.float32))
+        self.subgaussian_rotation = Parameter(torch.empty(0, device=device, dtype=torch.float32))
         
         self.colors = Parameter(torch.empty(0, device=device, dtype=torch.float32))
 
@@ -41,6 +42,7 @@ class PeriodicGaussians2D(torch.nn.Module):
 
             {'params': [self.subgaussian_frequency], 'lr': 0.0001, "name": "subgaussian_frequency"},
             {'params': [self.subgaussian_coefficients], 'lr': 0.001, "name": "subgaussian_coefficients"},
+            {'params': [self.subgaussian_rotation], 'lr': 0.001, "name": "subgaussian_rotation"},
             
             {'params': [self.colors], 'lr': 0.00001, "name": "colors"}
         ]
@@ -110,18 +112,20 @@ class PeriodicGaussians2D(torch.nn.Module):
                 self.gaussian_mats = updated_params['gaussian_mats']
                 self.subgaussian_coefficients = updated_params['subgaussian_coefficients']
                 self.subgaussian_frequency = updated_params['subgaussian_frequency']
+                self.subgaussian_rotation = updated_params['subgaussian_rotation']
 
-    def add_primitives(self, x, y, n_freqs=256, 
+    def add_primitives(self, x, y, n_freqs=256, n_angles=180, 
                        freq_decay = 1.0, min_influence=1./255.,
                        num_to_add=1):
         #plt.scatter(x.cpu().numpy()[:,1], x.cpu().numpy()[:,0],c=y.cpu().numpy())
         #plt.show()
-        ls_model = LombScargle2D(x, y, n_terms=1, device=self.device)
+        ls_model = LombScargle2Danglefreq(x, y, n_terms=1, device=self.device)
         # Randomize set of wavelengths and freqs to fit in correct range
         freqs = 0.1+torch.sort(freq_decay*64*torch.rand([n_freqs], device=self.device, dtype=torch.float32)).values
+        angles = torch.sort(torch.pi*0.5*torch.rand([n_angles], device=self.device, dtype=torch.float32)).values
         
         # Fit model and find peaks
-        ls_model.fit(freqs)            
+        ls_model.fit(freqs, angles)            
         self.data_periodogram = ls_model.get_power()
         n_extracted_peaks = ls_model.find_peaks(top_n=num_to_add, 
                                                 min_influence=min_influence)
@@ -130,6 +134,8 @@ class PeriodicGaussians2D(torch.nn.Module):
         all_colors = ls_model.get_PCA_color()[None,:].repeat(n_extracted_peaks, 1) / n_extracted_peaks
 
         all_frequencies = ls_model.get_peak_freqs()
+        all_angles = all_frequencies[:,0]
+        all_frequencies = all_frequencies[:,1]
         coeffs = ls_model.get_peak_coeffs()
 
         means, vars = ls_model.get_peak_placement(torch.arange(0,n_extracted_peaks,1,dtype=torch.long,device=self.device))
@@ -142,6 +148,7 @@ class PeriodicGaussians2D(torch.nn.Module):
             "gaussian_means": means, 
             "gaussian_mats": mats,
             "subgaussian_frequency": all_frequencies,
+            "subgaussian_rotation": all_angles,
             "subgaussian_coefficients": coeffs,
             "colors": all_colors
         }
@@ -150,6 +157,7 @@ class PeriodicGaussians2D(torch.nn.Module):
         self.gaussian_means = updated_params['gaussian_means']
         self.gaussian_mats = updated_params['gaussian_mats']
         self.subgaussian_frequency = updated_params['subgaussian_frequency']
+        self.subgaussian_rotation = updated_params['subgaussian_rotation']
         self.subgaussian_coefficients = updated_params['subgaussian_coefficients']
         self.colors = updated_params['colors']
 
@@ -226,15 +234,14 @@ class PeriodicGaussians2D(torch.nn.Module):
         # periodic gaussian parts
         # Fitted sinusoidal wave
         # [N, channels]
-        sx = torch.sin(2*torch.pi*x[:,None,0]*self.subgaussian_frequency[None,...,0])
-        cx = torch.cos(2*torch.pi*x[:,None,0]*self.subgaussian_frequency[None,...,0])
-        sy = torch.sin(2*torch.pi*x[:,None,1]*self.subgaussian_frequency[None,...,1])
-        cy = torch.cos(2*torch.pi*x[:,None,1]*self.subgaussian_frequency[None,...,1])
-        vals = self.subgaussian_coefficients[None,:,0,0]*cx*cy + \
-                self.subgaussian_coefficients[None,:,0,1]*cx*sy + \
-                self.subgaussian_coefficients[None,:,0,2]*sx*cy + \
-                self.subgaussian_coefficients[None,:,0,3]*sx*sy + \
-                self.subgaussian_coefficients[None,:,0,4]
+        r = torch.linalg.norm(x, dim=-1)
+        theta = torch.arctan2(x[:,1], x[:,0])
+        theta = theta[...,None] + self.subgaussian_rotation[None,:]
+        x_r = r[...,None]*torch.cos(theta)
+        x_r = 2*torch.pi*x_r*self.subgaussian_frequency[None,:]
+        vals = self.subgaussian_coefficients[None,:,0,0]*torch.cos(x_r) + \
+                self.subgaussian_coefficients[None,:,0,1]*torch.sin(x_r) + \
+                self.subgaussian_coefficients[None,:,0,2]
         
         # [N, n_primitives, 1]
         vals = gauss_vals*vals[...,None]*self.colors[None,...]

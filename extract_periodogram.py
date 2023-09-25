@@ -2,6 +2,7 @@ import torch
 import numpy as np
 from models.LombScargle import MyLombScargleModel
 from models.LombScargle2D import LombScargle2D
+from models.LombScargle2Danglefreq import LombScargle2Danglefreq
 from models.Clustering import viz_PCA, viz_TSNE
 import matplotlib.pyplot as plt
 from utils.data_generators import load_img, sample_img_points
@@ -39,9 +40,10 @@ if __name__ == "__main__":
         
         new_img = np.zeros_like(img)
 
-        ls_model = LombScargle2D(x,y, n_terms=1, device=device)
-        freqs = torch.linspace(0.2, 24, 128)
-        ls_model.fit(freqs)
+        ls_model = LombScargle2Danglefreq(x,y, n_terms=1, device=device)
+        freqs = torch.linspace(0.2,48, 128)
+        angles = torch.linspace(0, 0.5*torch.pi, 180)
+        ls_model.fit(freqs, angles)
         n_extracted = ls_model.find_peaks(top_n=4)
         ls_model.plot_power()
         means, vars = ls_model.get_peak_placement(torch.arange(0, n_extracted, 1, dtype=torch.long, device=device))
@@ -53,20 +55,6 @@ if __name__ == "__main__":
     print(f"Peak color { color }")
     print("original peaks")
     
-    xm = 2*torch.pi*peak_freqs[0,0]*g[:,0]
-    ym = 2*torch.pi*peak_freqs[0,1]*g[:,1]
-    channels = []
-    for i in range(peak_coeff.shape[1]):
-        chan = peak_coeff[0,i,0]*torch.cos(xm)*torch.cos(ym) + \
-            peak_coeff[0,i,1]*torch.cos(xm)*torch.sin(ym) + \
-            peak_coeff[0,i,2]*torch.sin(xm)*torch.cos(ym) + \
-            peak_coeff[0,i,3]*torch.sin(xm)*torch.sin(ym) + \
-            peak_coeff[0,i,4]
-        channels.append(chan)
-    rgb = torch.stack(channels, dim=-1) @ color.mT 
-    rgb = rgb.reshape(img.shape[0], img.shape[1], rgb.shape[-1])
-    plt.imshow(rgb.cpu().numpy())
-    plt.show()
 
 
         

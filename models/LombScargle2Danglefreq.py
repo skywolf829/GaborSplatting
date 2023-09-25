@@ -10,7 +10,7 @@ from matplotlib.figure import Figure
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 torch.backends.cuda.matmul.allow_tf32 = True
 
-class LombScargle2D():
+class LombScargle2Danglefreq():
     def __init__(self, x: torch.Tensor, y:torch.Tensor, n_terms = 1, device="cuda"):
         if(device == "cuda"):
             assert torch.cuda.is_available(), f"Set device is cuda, but torch.cuda.is_available() = False"
@@ -31,32 +31,25 @@ class LombScargle2D():
         self.unique_bands = torch.arange(self.n_bands, device=device)
 
         self.modeled_frequencies : torch.Tensor = None
+        self.modeled_angles : torch.Tensor = None
 
         self.wave_coefficients : torch.Tensor = None
         self.power : torch.Tensor = None
 
         self.peak_idx : torch.Tensor = None
-
-        self.linear_in_frequency : bool = False
-        self.perfect_fit : bool = False
         
         self.nterms = n_terms
         self.nterms_band = 1
         self.reg_band = 1e-6
 
-    def generate_waves(self, x, y):
-        x = x[None,...]
-        y = y[:,None,...]
-        waves = torch.empty([y.shape[0], x.shape[1], x.shape[2], 5], device=x.device, dtype=torch.float32)
-        waves[...,0] = torch.cos(x)*torch.cos(y)
-        waves[...,1] = torch.cos(x)*torch.sin(y)
-        waves[...,2] = torch.sin(x)*torch.cos(y)
-        waves[...,3] = torch.sin(x)*torch.sin(y)
-        waves[...,4] = 1
-
+    def generate_waves(self, x):
+        waves = torch.empty(list(x.shape)+ [3], device=x.device, dtype=torch.float32)
+        waves[...,0] = torch.cos(x)
+        waves[...,1] = torch.sin(x)
+        waves[...,2] = 1
         return waves
 
-    def fit(self, frequencies:torch.Tensor):
+    def fit(self, frequencies:torch.Tensor, angles:torch.Tensor):
         """
         Fits the model to each frequency in frequencies.
         Also fits angles, which are given as a list of angles in theta, phi order.
@@ -69,13 +62,15 @@ class LombScargle2D():
             self.peak_idx = None
             
             frequencies = frequencies.to(self.device)
+            angles = angles.to(self.device)
 
             self.modeled_frequencies = frequencies
-            self.wave_coefficients = torch.empty([frequencies.shape[0], 
+            self.modeled_angles = angles
+            self.wave_coefficients = torch.empty([angles.shape[0], 
                                                 frequencies.shape[0], 
-                                                1, 5],
+                                                1, 3],
                                                 device=self.device, dtype=torch.float32)
-            self.power = torch.empty([frequencies.shape[0], frequencies.shape[0]], 
+            self.power = torch.empty([angles.shape[0], frequencies.shape[0]], 
                                     device = self.device, dtype=torch.float32)
             
             pca_result = torch.pca_lowrank(self.y, center=False)
@@ -91,18 +86,22 @@ class LombScargle2D():
             # Calculate chi-squared
             chi2 = yw.t() @ yw  # reference chi2 for later comparison
 
-            max_system_size = 2**21
+            # spherical coords
+            r = torch.linalg.norm(self.x, dim=-1)
+            theta = torch.arctan2(self.x[:,1],self.x[:,0])
+
+            max_system_size = 2**20
             rows_per_batch = max(1, min(frequencies.shape[0], 
                             int(frequencies.shape[0]*max_system_size/(frequencies.shape[0]*self.x.shape[0]))))
             row = 0
-            while row < frequencies.shape[0]:         
-                end_row = min(row+rows_per_batch, frequencies.shape[0])   
+            while row < angles.shape[0]:       
+                end_row = min(row+rows_per_batch, angles.shape[0])     
                 # Construct X - design matrix of the stationary sinusoid model
                 # Most time is spent making this.
-                x_modulated = 2*torch.pi*self.x[None,:,0] * self.modeled_frequencies[:,None]
-                y_modulated = 2*torch.pi*self.x[None,:,1] * self.modeled_frequencies[row:end_row,None]
-                
-                X = self.generate_waves(x_modulated, y_modulated)
+                offsets = theta[None,...].repeat(end_row-row, 1) + self.modeled_angles[row:end_row,None]
+                x_r = r[None,...] * torch.cos(offsets)
+                x_r = 2 * torch.pi * x_r[:,None,:] * self.modeled_frequencies[None,:,None]
+                X = self.generate_waves(x_r)
                 XTX = X.mT @ X
                 XTy = X.mT @ yw[None,...]
                 # Matrix Algebra to calculate the Lomb-Scargle power at each omega step
@@ -130,18 +129,11 @@ class LombScargle2D():
     
     def find_peaks(self, min_influence=1./255., top_n = None):
         assert self.power is not None, f"power is none, fit a model first"
-        kernel_size = 29
+        kernel_size = 9
         padding = kernel_size//2
 
-        if(self.n_dims == 1):
-            filter = torch.nn.MaxPool1d(kernel_size, padding=0, stride=1)
-        elif(self.n_dims == 2):
-            filter = torch.nn.MaxPool2d(kernel_size, padding=0, stride=1)
-        elif(self.n_dims == 3):
-            filter = torch.nn.MaxPool3d(kernel_size, padding=0, stride=1)
-        else:
-            print(f"Peak finding not supported for {self.n_dims}D")
-        
+        filter = torch.nn.MaxPool2d(kernel_size, padding=0, stride=1)
+                
         # Pad with circular padding for angle, constant for freq.
         sig = torch.nn.functional.pad(self.power[None,None,...], pad=[0, 0, padding, padding], mode='circular')
         sig = torch.nn.functional.pad(sig, pad=[padding, padding, 0, 0], mode='constant', value=-float("Inf"))
@@ -170,13 +162,9 @@ class LombScargle2D():
     def get_peak_freqs(self):
         assert self.peak_idx is not None, "Must compute peaks first with find_peaks()"
 
-        if(self.n_dims == 1):
-            freqs = self.modeled_frequencies[self.peak_idx[:,0]]
-            return freqs
-        elif(self.n_dims == 2):
-            freq_x = self.modeled_frequencies[self.peak_idx[:,1]]
-            freq_y = self.modeled_frequencies[self.peak_idx[:,0]]
-            return torch.stack([freq_x, freq_y], dim=-1)
+        angle = self.modeled_angles[self.peak_idx[:,0]]
+        freq = self.modeled_frequencies[self.peak_idx[:,1]]
+        return torch.stack([angle, freq], dim=-1)
 
     def get_peak_coeffs(self):
         assert self.peak_idx is not None, "Must compute peaks first with find_peaks()"
@@ -194,25 +182,25 @@ class LombScargle2D():
 
     def get_peak_placement(self, idx):
         selected_idx = self.peak_idx[idx]
-        x_freq = self.modeled_frequencies[selected_idx[:,1]]
-        y_freq = self.modeled_frequencies[selected_idx[:,0]]
+        angle = self.modeled_angles[selected_idx[:,0]]
+        freq = self.modeled_frequencies[selected_idx[:,1]]
 
-        x_in = self.x[:,0:1]*2*torch.pi*x_freq[None,...]
-        y_in = self.x[:,1:2]*2*torch.pi*y_freq[None,...]
-        
+        r = torch.linalg.norm(self.x, dim=-1)
+        theta = torch.arctan2(self.x[:,1],self.x[:,0])
+
+        offsets = theta[None,...].repeat(angle.shape[0], 1) + angle[:,None]
+        x_r = r[None,...] * torch.cos(offsets)
+        x_r = 2 * torch.pi * x_r * freq[:,None]
+                
         coeffs = self.wave_coefficients[selected_idx[:,0], selected_idx[:,1],0]
-        pred = coeffs[None,:,0]*torch.cos(x_in)*torch.cos(y_in) +\
-                coeffs[None,:,1]*torch.cos(x_in)*torch.sin(y_in) +\
-                coeffs[None,:,2]*torch.sin(x_in)*torch.cos(y_in) +\
-                coeffs[None,:,3]*torch.sin(x_in)*torch.sin(y_in) +\
-                coeffs[None,:,4]
         
-        
+        pred = coeffs[:,0:1]*torch.cos(x_r) +\
+                coeffs[:,1:2]*torch.sin(x_r) +\
+                coeffs[:,2:3]
         show_peak = 1
         #plt.scatter(self.x[:,1].cpu().numpy(), -self.x[:,0].cpu().numpy(),c=pred[:,show_peak].cpu().numpy(), cmap="gray")
         #plt.show()
-
-        pred = pred[...,None] @ self.PCA_color[None,None,...]
+        pred = pred.mT[...,None] @ self.PCA_color[None,None,...]
         err = pred-self.y[:,None,:]
         err = err.norm(dim=-1)
         #plt.scatter(self.x[:,1].cpu().numpy(), -self.x[:,0].cpu().numpy(),c=err[:,show_peak].cpu().numpy(), cmap="coolwarm")
@@ -243,61 +231,43 @@ class LombScargle2D():
         canvas = FigureCanvasAgg(fig)
         ax = fig.add_subplot()
 
-        if(self.n_dims == 1):
-            x_axis = self.modeled_frequencies.clone()
-            values = self.power.clone()
-            x_label = "Frequencies (Hz)"
-            y_label = "Power"
-            plt.plot(x_axis.cpu().numpy(), values.cpu().numpy())
-
-            if(self.peak_idx is not None):
-                idx_peaks = self.peak_idx.clone()
-                x = x_axis[idx_peaks[:,0]]
-                y = values[idx_peaks[:,0]]
-                plt.scatter(x.cpu().numpy(), y.cpu().numpy())
-
-            plt.xlabel(x_label)
-            plt.ylabel(y_label)
-            plt.show()
-
-        elif(self.n_dims == 2):
-            x_axis = self.modeled_frequencies.clone()
-            y_axis = self.modeled_frequencies.clone()
-            values = self.power.clone()
-            y_label = "y Frequencies (Hz)"
-            x_label = "x Frequencies (Hz)"
-            
-            x_min = x_axis[0].cpu().numpy()
-            x_max = x_axis[-1].cpu().numpy()
-            y_min = y_axis[0].cpu().numpy()
-            y_max = y_axis[-1].cpu().numpy()
-            x_width = (x_max-x_min)
-            y_height = (y_max-y_min)
-
-            ax.imshow(values.cpu().flip(dims=[0]).numpy(), extent=[x_min, x_max, y_min, y_max], 
-               aspect=x_width/y_height)
+        x_axis = self.modeled_frequencies.clone()
+        y_axis = self.modeled_angles.clone()
+        values = self.power.clone()
+        y_label = "Angle"
+        x_label = "x Frequencies (Hz)"
         
-            if(self.peak_idx is not None):
-                idx_peaks = self.peak_idx.clone().cpu()
-                x = x_axis[idx_peaks[:,1]]
-                y = y_axis[idx_peaks[:,0]]
-                ax.scatter(x.cpu().numpy(), y.cpu().numpy())
-            
+        x_min = x_axis[0].cpu().numpy()
+        x_max = x_axis[-1].cpu().numpy()
+        y_min = y_axis[0].cpu().numpy()
+        y_max = y_axis[-1].cpu().numpy()
+        x_width = (x_max-x_min)
+        y_height = (y_max-y_min)
 
-            ax.set_xlabel(x_label)
-            ax.set_ylabel(y_label)
-            
-            canvas.draw()  # Draw the canvas, cache the renderer
-            s, (width, height) = canvas.print_to_buffer()
-            # Option 2a: Convert to a NumPy array.
-            image = np.frombuffer(s, np.uint8).reshape((height, width, 4)).copy()
+        ax.imshow(values.cpu().flip(dims=[0]).numpy(), extent=[x_min, x_max, y_min, y_max], 
+            aspect=x_width/y_height)
+    
+        if(self.peak_idx is not None):
+            idx_peaks = self.peak_idx.clone().cpu()
+            x = x_axis[idx_peaks[:,1]]
+            y = y_axis[idx_peaks[:,0]]
+            ax.scatter(x.cpu().numpy(), y.cpu().numpy())
+        
 
-            if(return_img):
-                return image
-            else:
-                plt.imshow(image)
-                plt.axis('off')
-                plt.show()
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        
+        canvas.draw()  # Draw the canvas, cache the renderer
+        s, (width, height) = canvas.print_to_buffer()
+        # Option 2a: Convert to a NumPy array.
+        image = np.frombuffer(s, np.uint8).reshape((height, width, 4)).copy()
+
+        if(return_img):
+            return image
+        else:
+            plt.imshow(image)
+            plt.axis('off')
+            plt.show()
 
     def transform_from_peaks(self, new_points, top_n_peaks = None, peaks_to_use = None):
         assert torch.is_tensor(new_points), f"new_points must be a tensor"
