@@ -17,7 +17,7 @@ if __name__ == "__main__":
     device = "cuda"
     
     # Load data
-    img = load_img("./data/synthetic10.jpg")
+    img = load_img("./data/synthetic.jpg")
     x,y = sample_img_points(img, n_points, plot=False)
     #x = np.load("./data/point_positions.npy")
     #y = np.load("./data/point_colors.npy")
@@ -42,7 +42,7 @@ if __name__ == "__main__":
 
         ls_model = LombScargle2Danglefreq(x,y, n_terms=1, device=device)
         freqs = torch.linspace(0.2,48, 128)
-        angles = torch.linspace(0, 0.5*torch.pi, 180)
+        angles = torch.linspace(0, torch.pi, 180)
         ls_model.fit(freqs, angles)
         n_extracted = ls_model.find_peaks(top_n=4)
         ls_model.plot_power()

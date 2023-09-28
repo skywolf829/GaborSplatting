@@ -234,10 +234,9 @@ class PeriodicGaussians2Dfreqangle(torch.nn.Module):
         # periodic gaussian parts
         # Fitted sinusoidal wave
         # [N, channels]
-        r = torch.linalg.norm(x, dim=-1)
-        theta = torch.arctan2(x[:,1], x[:,0])
-        theta = theta[...,None] + self.subgaussian_rotation[None,:]
-        x_r = r[...,None]*torch.cos(theta)
+        
+        x_r = x[:,0:1]*torch.cos(self.subgaussian_rotation[None,:]) + \
+                x[:,1:2]*torch.sin(self.subgaussian_rotation[None,:])
         x_r = 2*torch.pi*x_r*self.subgaussian_frequency[None,:]
         vals = self.subgaussian_coefficients[None,:,0,0]*torch.cos(x_r) + \
                 self.subgaussian_coefficients[None,:,0,1]*torch.sin(x_r) + \

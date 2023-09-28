@@ -81,13 +81,13 @@ class GaussianSplatting2D(torch.nn.Module):
                     optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
 
-    def add_primitives(self, num_to_add = 10):
+    def add_primitives(self, num_gaussians = 10):
 
         new_colors = (0.05) - \
-            0.1*(torch.rand([num_to_add, self.n_channels], dtype=torch.float32, device=self.device))
-        new_means = torch.rand([num_to_add, 2], dtype=torch.float32, device=self.device)
-        new_rotations = torch.pi*torch.rand([num_to_add, 1], dtype=torch.float32, device=self.device)
-        new_scales = 3.-0.5*torch.rand([num_to_add, 1], dtype=torch.float32, device=self.device).expand(-1, 2)
+            0.1*(torch.rand([num_gaussians, self.n_channels], dtype=torch.float32, device=self.device))
+        new_means = torch.rand([num_gaussians, 2], dtype=torch.float32, device=self.device)
+        new_rotations = torch.pi*torch.rand([num_gaussians, 1], dtype=torch.float32, device=self.device)
+        new_scales = 3.-0.5*torch.rand([num_gaussians, 1], dtype=torch.float32, device=self.device).expand(-1, 2)
 
         tensor_dict = {
             "colors": new_colors, 
@@ -102,7 +102,7 @@ class GaussianSplatting2D(torch.nn.Module):
         self.means = updated_params['means']
         self.scales = updated_params['scales']
         self.rotations = updated_params['rotations']
-        return num_to_add
+        return num_gaussians
 
     def prune_primitives(self, min_contribution=1./255.):
         if(self.means.shape[0] == 0):

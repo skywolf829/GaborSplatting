@@ -86,10 +86,6 @@ class LombScargle2Danglefreq():
             # Calculate chi-squared
             chi2 = yw.t() @ yw  # reference chi2 for later comparison
 
-            # spherical coords
-            r = torch.linalg.norm(self.x, dim=-1)
-            theta = torch.arctan2(self.x[:,1],self.x[:,0])
-
             max_system_size = 2**20
             rows_per_batch = max(1, min(frequencies.shape[0], 
                             int(frequencies.shape[0]*max_system_size/(frequencies.shape[0]*self.x.shape[0]))))
@@ -98,8 +94,10 @@ class LombScargle2Danglefreq():
                 end_row = min(row+rows_per_batch, angles.shape[0])     
                 # Construct X - design matrix of the stationary sinusoid model
                 # Most time is spent making this.
-                offsets = theta[None,...].repeat(end_row-row, 1) + self.modeled_angles[row:end_row,None]
-                x_r = r[None,...] * torch.cos(offsets)
+                
+                x_r = self.x[:,0:1].mT * torch.cos(self.modeled_angles[row:end_row])[...,None] + \
+                    self.x[:,1:2].mT * torch.sin(self.modeled_angles[row:end_row])[...,None]
+                
                 x_r = 2 * torch.pi * x_r[:,None,:] * self.modeled_frequencies[None,:,None]
                 X = self.generate_waves(x_r)
                 XTX = X.mT @ X

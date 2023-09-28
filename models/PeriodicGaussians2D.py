@@ -42,7 +42,7 @@ class PeriodicGaussians2D(torch.nn.Module):
             {'params': [self.subgaussian_frequency], 'lr': 0.0001, "name": "subgaussian_frequency"},
             {'params': [self.subgaussian_coefficients], 'lr': 0.001, "name": "subgaussian_coefficients"},
             
-            {'params': [self.colors], 'lr': 0.00001, "name": "colors"}
+            {'params': [self.colors], 'lr': 0.001, "name": "colors"}
         ]
 
         optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
@@ -113,7 +113,7 @@ class PeriodicGaussians2D(torch.nn.Module):
 
     def add_primitives(self, x, y, n_freqs=256, 
                        freq_decay = 1.0, min_influence=1./255.,
-                       num_to_add=1):
+                       num_waves=1):
         #plt.scatter(x.cpu().numpy()[:,1], x.cpu().numpy()[:,0],c=y.cpu().numpy())
         #plt.show()
         ls_model = LombScargle2D(x, y, n_terms=1, device=self.device)
@@ -123,7 +123,7 @@ class PeriodicGaussians2D(torch.nn.Module):
         # Fit model and find peaks
         ls_model.fit(freqs)            
         self.data_periodogram = ls_model.get_power()
-        n_extracted_peaks = ls_model.find_peaks(top_n=num_to_add, 
+        n_extracted_peaks = ls_model.find_peaks(top_n=num_waves, 
                                                 min_influence=min_influence)
         self.ls_plot = ls_model.plot_power(return_img=True)
         self.ls_power = ls_model.power

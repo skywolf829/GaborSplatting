@@ -5,6 +5,7 @@ import imageio.v3 as imageio
 from utils.data_generators import load_img
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
+from scipy.interpolate import RegularGridInterpolator
 
 def thing1():
      x = np.linspace(-10., 10., 400)[None,:].repeat(400, axis=0)
@@ -337,14 +338,19 @@ def thing13():
 
 def thing14():
      x = np.linspace(-5., 5., 2048)
-     y = np.sin(x*2*np.pi*3.5)
+     y = np.sin(x*2*np.pi*1.5)
+     
+     #img= load_img("./data/tablecloth_gaussians.jpg")
+     #y = img[400, :, 0]
+     #x = np.linspace(0, 1.0, y.shape[0])
+     #y -= y.mean()
 
      errs = []
      freqs = []
-     for f in np.linspace(0, 6., 1024):
+     for f in np.linspace(-10, 10, 50000):
           freqs.append(f)
           y_prime = np.sin(x*2*np.pi*f)
-          err = ((y-y_prime)**2).mean()**0.5
+          err = (((y-y_prime)**2).mean()**0.5) * np.cos(f*2*np.pi) - np.cos(f*2*np.pi)
           errs.append(err)
      
      plt.plot(freqs,errs)
@@ -354,7 +360,119 @@ def thing14():
      plt.show()
 
      plt.plot(x, y)
-     plt.title("Original wave, f=3.5")
+     plt.title("Original wave")
      plt.show()
      
-thing14()
+#===================================================================
+# Get PSD 1D (total radial power spectrum)
+#===================================================================
+def GetPSD1D(psd2D):
+    h  = psd2D.shape[0]
+    w  = psd2D.shape[1]
+    wc = w//2
+    hc = h//2
+
+    # create an array of integer radial distances from the center
+    Y, X = np.ogrid[0:h, 0:w]
+    r    = np.hypot(X - wc, Y - hc).astype(int)
+
+    # SUM all psd2D pixels with label 'r' for 0<=r<=wc
+    # NOTE: this will miss power contributions in 'corners' r>wc
+    from scipy import ndimage
+    psd1D = ndimage.sum(psd2D, r, index=np.arange(0, wc))
+
+    return psd1D
+
+def thing15():
+     h = 256
+     w = 256
+     noise_h = 128
+     noise_w = 128
+
+     sampling_h = 512
+     sampling_w = 512
+
+     full_img = np.zeros([h, w])
+     full_img[h//2-noise_h//2:h//2+noise_h//2,
+              w//2-noise_w//2:w//2+noise_w//2] = np.random.rand(noise_h, noise_w)  
+     
+     
+     x = np.linspace(-1., 1., h)
+     y = np.linspace(-1., 1., w)
+     f = RegularGridInterpolator((y, x), full_img)
+
+     y_s = np.linspace(-0.7, 0.7, sampling_h)
+     x_s = np.linspace(-0.7, 0.7, sampling_w)
+     g = np.stack(np.meshgrid(y_s,x_s, indexing='ij'), axis=-1)
+
+     imgs = []
+     fourier_imgs = []
+     PSD_rows = []
+     for r in np.linspace(0, np.pi*2, 180):
+          g_r = g[:,:,None,:] @ np.array([[np.cos(r), np.sin(r)], [-np.sin(r), np.cos(r)]])
+          g_r = g_r[:,:,0,:]
+          
+          interp_data = f(g_r)
+          imgs.append((interp_data*255).astype(np.uint8))
+
+          img_fft = np.log(1+np.abs(np.fft.fftshift(np.fft.fft2(interp_data).real)))
+          img_fft /= img_fft.max()
+          fourier_imgs.append((img_fft*255).astype(np.uint8))
+
+          p = GetPSD1D(img_fft)
+          PSD_rows.append(p)
+          
+     PSD_rows = np.array(PSD_rows)
+     imageio.imwrite("rotated_noise.gif", imgs)
+     imageio.imwrite("rotated_fft.gif", fourier_imgs)
+     imageio.imwrite("PSD.png", ((PSD_rows/PSD_rows.max())*255).astype(np.uint8))
+
+
+def thing16():
+     h = 256
+     w = 256
+     noise_h = 256
+     noise_w = 256
+
+     sampling_h = 256
+     sampling_w = 256
+
+     full_img = np.zeros([h, w])
+     full_img[h//2-noise_h//2:h//2+noise_h//2,
+              w//2-noise_w//2:w//2+noise_w//2] = np.random.rand(noise_h, noise_w)  
+     
+     full_img_fft = np.fft.fftshift(np.fft.fft2(full_img))
+     
+     x = np.linspace(-1., 1., h)
+     y = np.linspace(-1., 1., w)
+     f = RegularGridInterpolator((y, x), full_img_fft)
+
+     y_s = np.linspace(-0.5, 0.5, sampling_h)
+     x_s = np.linspace(-0.5, 0.5, sampling_w)
+     g = np.stack(np.meshgrid(y_s,x_s, indexing='ij'), axis=-1)
+
+     imgs = []
+     fourier_imgs = []
+     PSD_rows = []
+     for r in np.linspace(0, np.pi*2, 180):
+          g_r = g[:,:,None,:] @ np.array([[np.cos(r), np.sin(r)], [-np.sin(r), np.cos(r)]])
+          g_r = g_r[:,:,0,:]
+          
+          im_fft = f(g_r)
+          im_fft_img = np.log(1+np.abs(im_fft.real))
+          im_fft_img /= im_fft_img.max()
+
+          img_fft = np.fft.ifft2(np.fft.ifftshift(im_fft))
+
+          imgs.append((img_fft.real*255).astype(np.uint8))
+          fourier_imgs.append((im_fft_img*255).astype(np.uint8))
+
+          #p = GetPSD1D(img_fft)
+          #PSD_rows.append(p)
+          
+     #PSD_rows = np.array(PSD_rows)
+     imageio.imwrite("rotated_noise.gif", imgs)
+     imageio.imwrite("rotated_fft.gif", fourier_imgs)
+     #imageio.imwrite("PSD.png", ((PSD_rows/PSD_rows.max())*255).astype(np.uint8))
+
+thing16()

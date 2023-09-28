@@ -22,12 +22,12 @@ if __name__ == '__main__':
     
     total_iters = 30000
     fine_tune_iters = 5000    
-    total_primitives = 180
+    total_primitives = 500
     primitives_per_update = 5
     iters_per_primitive = int((total_iters-fine_tune_iters) / (total_primitives/primitives_per_update))
     
-    model_type = PeriodicGaussians2Dfreqangle
-    img_name = "tablecloth.jpg"
+    model_type = HybridPrimitiveModel
+    img_name = "redblack_tablecloth.jpg"
 
     device = "cuda"
     torch.random.manual_seed(42)
@@ -95,9 +95,9 @@ if __name__ == '__main__':
                 img = to_img(img)
                 writer.add_image('reconstruction', img, i, dataformats='HWC')
                 
-                if("Siren" not in model.__class__.__name__):
-                    wave_img = to_img(model.vis_primitives(x))                
-                    writer.add_image('primitives', wave_img, i, dataformats='HWC')
+                #if("Siren" not in model.__class__.__name__):
+                    #wave_img = to_img(model.vis_primitives(x))                
+                    #writer.add_image('primitives', wave_img, i, dataformats='HWC')
 
         # adding primitives
         if i % iters_per_primitive == 0 and i < total_iters-fine_tune_iters and "Siren" not in model.__class__.__name__:
@@ -110,28 +110,30 @@ if __name__ == '__main__':
                 if(i>0):
                     residuals -= model(x[mask])
                 model.prune_primitives(1./500.)
+                n_waves = primitives_per_update
+                n_gaussians = 0
+                n_waves = 0 #if i < 100 else primitives_per_update
+                #n_gaussians = primitives_per_update-n_waves
+                n_gaussians = primitives_per_update
                 n_extracted_peaks = model.add_primitives(
                                     x[mask],
                                     residuals,
-                                    n_freqs = 150, 
-                                    n_angles = 180,
-                                    freq_decay=1.01**((i//iters_per_primitive)*primitives_per_update), 
+                                    n_freqs = 180, 
+                                    #n_angles = 180,
+                                    freq_decay=1.0075**((i//iters_per_primitive)*primitives_per_update), 
                                     min_influence=1./500.,
-                                    num_to_add = primitives_per_update)
-                writer.add_scalar("Max LS power", 
-                                      model.ls_power.max(), 
-                                      i)
-                writer.add_scalar("Min LS power", 
-                                      model.ls_power.min(), 
-                                      i)
-                if(n_extracted_peaks == 0 and tries == 0):
-                    print(f" Stopping wave detection early, no peaks found in {max_tries} iterations.")
-                    break
-                elif(n_extracted_peaks == 0):
-                    tries -= 1
-                else:
-                    tries = max_tries
-                if("Periodic" in model.__class__.__name__):
+                                    num_waves = n_waves,
+                                    num_gaussians = n_gaussians
+                                    )
+                if(n_waves > 0):
+                    writer.add_scalar("Max LS power", 
+                                        model.ls_power.max(), 
+                                        i)
+                    writer.add_scalar("Min LS power", 
+                                        model.ls_power.min(), 
+                                        i)
+                
+                if(n_waves > 0):
                     writer.add_image("Lomb-Scargle", model.ls_plot, i, dataformats="HWC")
         
         #if i % iters_per_wave == 0 and i > 0:
@@ -192,4 +194,3 @@ if __name__ == '__main__':
     writer.flush()
     writer.close()
     
-    print(f"Number of extracted waves: {model.colors.shape[0]}")
