@@ -37,9 +37,9 @@ class HybridPrimitiveModel(torch.nn.Module):
 
     def create_optimizer(self):
         l = [
-            {'params': [self.gaussian_colors], 'lr': 0.001, "name": "gaussian_colors"},
-            {'params': [self.gaussian_means], 'lr': 0.005, "name": "gaussian_means"},
-            {'params': [self.gaussian_mats], 'lr': 0.005, "name": "gaussian_mats"},
+            {'params': [self.gaussian_colors], 'lr': 0.01, "name": "gaussian_colors"},
+            {'params': [self.gaussian_means], 'lr': 0.01, "name": "gaussian_means"},
+            {'params': [self.gaussian_mats], 'lr': 0.01, "name": "gaussian_mats"},
 
             {'params': [self.wave_colors], 'lr': 0.001, "name": "wave_colors"},
             {'params': [self.wave_support_means], 'lr': 0.001, "name": "wave_support_means"},

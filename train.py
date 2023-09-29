@@ -22,7 +22,7 @@ if __name__ == '__main__':
     
     total_iters = 30000
     fine_tune_iters = 5000    
-    total_primitives = 500
+    total_primitives = 300
     primitives_per_update = 5
     iters_per_primitive = int((total_iters-fine_tune_iters) / (total_primitives/primitives_per_update))
     
@@ -110,11 +110,11 @@ if __name__ == '__main__':
                 if(i>0):
                     residuals -= model(x[mask])
                 model.prune_primitives(1./500.)
-                n_waves = primitives_per_update
-                n_gaussians = 0
-                n_waves = 0 #if i < 100 else primitives_per_update
-                #n_gaussians = primitives_per_update-n_waves
-                n_gaussians = primitives_per_update
+                #n_waves = primitives_per_update
+                #n_gaussians = 0
+                n_waves = 0 if i < 1000 else primitives_per_update
+                n_gaussians = primitives_per_update-n_waves
+                #n_gaussians = primitives_per_update
                 n_extracted_peaks = model.add_primitives(
                                     x[mask],
                                     residuals,

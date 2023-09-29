@@ -2,6 +2,10 @@
     "files.associations": {
         "vector": "cpp",
         "xstring": "cpp",
-        "xutility": "cpp"
+        "xutility": "cpp",
+        "initializer_list": "cpp",
+        "list": "cpp",
+        "type_traits": "cpp",
+        "xhash": "cpp"
     }
 }

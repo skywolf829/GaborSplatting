@@ -4,109 +4,113 @@
 // CUDA forward declarations
 
 std::vector<torch::Tensor> hybrid_model_forward_cuda(
-    torch::Tensor input, // [N, 2]
-    torch::Tensor gaussian_means, // [M, 2]
-    torch::Tensor gaussian_mats, // [M, 2, 2]
-    torch::Tensor gaussian_colors, // [M, 3]
-    torch::Tensor wave_means, // [W, 2]
-    torch::Tensor wave_mats, // [W, 2, 2]
-    torch::Tensor wave_frequencies, // [W, 2]
-    torch::Tensor wave_coefficients, // [W, 5]
-    torch::Tensor wave_colors); // [W, 3]
+    torch::Tensor input,                // [N, n_dim]
+    torch::Tensor gaussian_colors,      // [M, n_chan]
+    torch::Tensor gaussian_means,       // [M, n_dim]
+    torch::Tensor gaussian_mats,        // [M, n_dim, n_dim]
+    torch::Tensor wave_colors,          // [W, n_chan]
+    torch::Tensor wave_means,           // [W, n_dim]
+    torch::Tensor wave_mats,            // [W, n_dim, n_dim]
+    torch::Tensor wave_frequencies,     // [W, n_dim]
+    torch::Tensor wave_coefficients     // [W, 5]
+);
 
 std::vector<torch::Tensor> hybrid_model_backward_cuda(
-    torch::Tensor input, // [N, 2]
-    torch::Tensor gaussian_means, // [M, 2]
-    torch::Tensor gaussian_mats, // [M, 2, 2]
-    torch::Tensor gaussian_colors, // [M, 3]
-    torch::Tensor wave_means, // [W, 2]
-    torch::Tensor wave_mats, // [W, 2, 2]
-    torch::Tensor wave_frequencies, // [W, 2]
-    torch::Tensor wave_coefficients, // [W, 5]
-    torch::Tensor wave_colors,    // [W, 3]
-    torch::Tensor grad_gaussian_means, // [M, 2]
-    torch::Tensor grad_gaussian_mats, // [M, 2, 2]
-    torch::Tensor grad_gaussian_colors, // [M, 3]
-    torch::Tensor grad_wave_means, // [W, 2]
-    torch::Tensor grad_wave_mats, // [W, 2, 2]
-    torch::Tensor grad_wave_frequencies, // [W, 2]
-    torch::Tensor grad_wave_coefficients, // [W, 5]
-    torch::Tensor grad_wave_colors); // [W, 3]
+    torch::Tensor input,                    // [N, 2]
+    torch::Tensor gaussian_means,           // [M, 2]
+    torch::Tensor gaussian_mats,            // [M, 2, 2]
+    torch::Tensor gaussian_colors,          // [M, 3]
+    torch::Tensor wave_means,               // [W, 2]
+    torch::Tensor wave_mats,                // [W, 2, 2]
+    torch::Tensor wave_frequencies,         // [W, 2]
+    torch::Tensor wave_coefficients,        // [W, 5]
+    torch::Tensor wave_colors,              // [W, 3]
+    torch::Tensor grad_gaussian_means,      // [M, 2]
+    torch::Tensor grad_gaussian_mats,       // [M, 2, 2]
+    torch::Tensor grad_gaussian_colors,     // [M, 3]
+    torch::Tensor grad_wave_means,          // [W, 2]
+    torch::Tensor grad_wave_mats,           // [W, 2, 2]
+    torch::Tensor grad_wave_frequencies,    // [W, 2]
+    torch::Tensor grad_wave_coefficients,   // [W, 5]
+    torch::Tensor grad_wave_colors);        // [W, 3]
 
 // C++ interface
 
-#define CHECK_CUDA(x) TORCH_CHECK(x.device().is_cuda(), #x " must be a CUDA tensor")
-#define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
+#define CHECK_CUDA(x) AT_ASSERTM(x.is_cuda(), #x " must be a CUDA tensor")
+#define CHECK_CONTIGUOUS(x) AT_ASSERTM(x.is_contiguous(), #x " must be contiguous")
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
 std::vector<torch::Tensor> hybrid_model_forward(
-    torch::Tensor input, // [N, 2]
-    torch::Tensor gaussian_means, // [M, 2]
-    torch::Tensor gaussian_mats, // [M, 2, 2]
-    torch::Tensor gaussian_colors, // [M, 3]
-    torch::Tensor wave_means, // [W, 2]
-    torch::Tensor wave_mats, // [W, 2, 2]
-    torch::Tensor wave_frequencies, // [W, 2]
-    torch::Tensor wave_coefficients, // [W, 5]
-    torch::Tensor wave_colors) {
-  CHECK_INPUT(input);
-  CHECK_INPUT(gaussian_means);
-  CHECK_INPUT(gaussian_mats);
-  CHECK_INPUT(gaussian_colors);
-  CHECK_INPUT(wave_means);
-  CHECK_INPUT(wave_mats);
-  CHECK_INPUT(wave_frequencies);
-  CHECK_INPUT(wave_coefficients);
-  CHECK_INPUT(wave_colors);
+    torch::Tensor input,                // [N, n_dims]
+    torch::Tensor gaussian_colors,      // [M, n_chans]
+    torch::Tensor gaussian_means,       // [M, n_dims]
+    torch::Tensor gaussian_mats,        // [M, n_dims, n_dims]
+    torch::Tensor wave_colors,          // [W, n_chans]
+    torch::Tensor wave_means,           // [W, n_dims]
+    torch::Tensor wave_mats,            // [W, n_dims, n_dims]
+    torch::Tensor wave_frequencies,     // [W, n_dims]
+    torch::Tensor wave_coefficients     // [W, 5]
+    ) {
+    CHECK_INPUT(input);
+    CHECK_INPUT(gaussian_means);
+    CHECK_INPUT(gaussian_mats);
+    CHECK_INPUT(gaussian_colors);
+    CHECK_INPUT(wave_means);
+    CHECK_INPUT(wave_mats);
+    CHECK_INPUT(wave_frequencies);
+    CHECK_INPUT(wave_coefficients);
+    CHECK_INPUT(wave_colors);
 
-  return cuda_forward(input, 
-    gaussian_mean, 
-    gaussian_mats, 
-    gaussian_colors,
-    wave_means, 
-    wave_mats, 
-    wave_frequencies, 
-    wave_coefficients, 
-    wave_colors);
+    return hybrid_model_forward_cuda(input, 
+        gaussian_colors,
+        gaussian_means, 
+        gaussian_mats,  
+        wave_colors,
+        wave_means, 
+        wave_mats, 
+        wave_frequencies, 
+        wave_coefficients
+        );
 }
 
-std::vector<torch::Tensor> hybrid_model_backward(
-    torch::Tensor input, // [N, 2]
-    torch::Tensor gaussian_means, // [M, 2]
-    torch::Tensor gaussian_mats, // [M, 2, 2]
-    torch::Tensor gaussian_colors, // [M, 3]
-    torch::Tensor wave_means, // [W, 2]
-    torch::Tensor wave_mats, // [W, 2, 2]
-    torch::Tensor wave_frequencies, // [W, 2]
-    torch::Tensor wave_coefficients, // [W, 5]
-    torch::Tensor wave_colors,    // [W, 3]
-    torch::Tensor grad_gaussian_means, // [M, 2]
-    torch::Tensor grad_gaussian_mats, // [M, 2, 2]
-    torch::Tensor grad_gaussian_colors, // [M, 3]
-    torch::Tensor grad_wave_means, // [W, 2]
-    torch::Tensor grad_wave_mats, // [W, 2, 2]
-    torch::Tensor grad_wave_frequencies, // [W, 2]
-    torch::Tensor grad_wave_coefficients, // [W, 5]
-    torch::Tensor grad_wave_colors) {
-  CHECK_INPUT(input);
-  CHECK_INPUT(gaussian_means);
-  CHECK_INPUT(gaussian_mats);
-  CHECK_INPUT(gaussian_colors);
-  CHECK_INPUT(wave_means);
-  CHECK_INPUT(wave_mats);
-  CHECK_INPUT(wave_frequencies);
-  CHECK_INPUT(wave_coefficients);
-  CHECK_INPUT(wave_colors);
-  CHECK_INPUT(grad_gaussian_means);
-  CHECK_INPUT(grad_gaussian_mats);
-  CHECK_INPUT(grad_gaussian_colors);
-  CHECK_INPUT(grad_wave_means);
-  CHECK_INPUT(grad_wave_mats);
-  CHECK_INPUT(grad_wave_frequencies);
-  CHECK_INPUT(grad_wave_coefficients);
-  CHECK_INPUT(grad_wave_colors);
 
-  return hybrid_model_backward_cuda(
+std::vector<torch::Tensor> hybrid_model_backward(
+    torch::Tensor input,                    // [N, 2]
+    torch::Tensor gaussian_means,           // [M, 2]
+    torch::Tensor gaussian_mats,            // [M, 2, 2]
+    torch::Tensor gaussian_colors,          // [M, 3]
+    torch::Tensor wave_means,               // [W, 2]
+    torch::Tensor wave_mats,                // [W, 2, 2]
+    torch::Tensor wave_frequencies,         // [W, 2]
+    torch::Tensor wave_coefficients,        // [W, 5]
+    torch::Tensor wave_colors,              // [W, 3]
+    torch::Tensor grad_gaussian_means,      // [M, 2]
+    torch::Tensor grad_gaussian_mats,       // [M, 2, 2]
+    torch::Tensor grad_gaussian_colors,     // [M, 3]
+    torch::Tensor grad_wave_means,          // [W, 2]
+    torch::Tensor grad_wave_mats,           // [W, 2, 2]
+    torch::Tensor grad_wave_frequencies,    // [W, 2]
+    torch::Tensor grad_wave_coefficients,   // [W, 5]
+    torch::Tensor grad_wave_colors) {
+    CHECK_INPUT(input);
+    CHECK_INPUT(gaussian_means);
+    CHECK_INPUT(gaussian_mats);
+    CHECK_INPUT(gaussian_colors);
+    CHECK_INPUT(wave_means);
+    CHECK_INPUT(wave_mats);
+    CHECK_INPUT(wave_frequencies);
+    CHECK_INPUT(wave_coefficients);
+    CHECK_INPUT(wave_colors);
+    CHECK_INPUT(grad_gaussian_means);
+    CHECK_INPUT(grad_gaussian_mats);
+    CHECK_INPUT(grad_gaussian_colors);
+    CHECK_INPUT(grad_wave_means);
+    CHECK_INPUT(grad_wave_mats);
+    CHECK_INPUT(grad_wave_frequencies);
+    CHECK_INPUT(grad_wave_coefficients);
+    CHECK_INPUT(grad_wave_colors);
+
+    return hybrid_model_backward_cuda(
         input,
         gaussian_means,
         gaussian_mats,
@@ -125,6 +129,7 @@ std::vector<torch::Tensor> hybrid_model_backward(
         grad_wave_coefficients,
         grad_wave_colors);
 }
+
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("forward", &hybrid_model_forward, "Hybrid model forward (CUDA)");
