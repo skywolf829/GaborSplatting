@@ -1,10 +1,11 @@
 import torch
 from torch.utils.cpp_extension import load
 from torch.nn import Parameter
+import os
 
 hybrid_primitives = load(name='hybrid_primitives', 
-                    sources=['hybrid_primitives_cuda.cpp', 
-                             'hybrid_primitives_cuda_kernel.cu'])
+                    sources=[os.path.join("/".join(__file__.split('/')[0:-1]), 'hybrid_primitives_cuda.cpp'), 
+                             os.path.join("/".join(__file__.split('/')[0:-1]), 'hybrid_primitives_cuda_kernel.cu')])
 
 class HybridPrimitivesFunction(torch.autograd.Function):
     @staticmethod
