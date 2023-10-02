@@ -18,54 +18,127 @@ namespace{
         const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_coefficients,
         torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> output) {
 
+        const float TWO_PI = 2.0f*3.1415926f;
+
         // Get block/thread related numbers   
-        int index = blockIdx.x * blockDim.x + threadIdx.x;
-        int stride = blockDim.x * gridDim.x;
-        
-        for (int i = index; i < output.size(0); i+=stride){  
-            const auto x = input[i];
-            for(int j = 0; j < gaussian_colors.size(0); j++){
-                const auto g_x = (x[0] - gaussian_means[j][0]) * gaussian_mats[j][0][0] +
-                        (x[1] - gaussian_means[j][1]) * gaussian_mats[j][1][0];
-                const auto g_y = (x[0] - gaussian_means[j][0]) * gaussian_mats[j][0][1] + 
-                        (x[1] - gaussian_means[j][1]) * gaussian_mats[j][1][1];
-                const auto g = exp(-(g_x * g_x + g_y * g_y) / 2.0f);
-                for (int k = 0; k < output.size(1); k++){ output[i][k] += g*gaussian_colors[j][k]; }
-            }            
+        const int index = blockIdx.x * blockDim.x + threadIdx.x;
+        const int stride = blockDim.x * gridDim.x;
+        const int num_primitives = gaussian_colors.size(0) + wave_colors.size(0);
+
+        for (int i = index; i < output.size(0)*num_primitives; i += stride){
+            const int output_idx = i / num_primitives;
+
+            // Check if we're out of bounds and return if so
+            if(output_idx>output.size(0)) return;
+
+            int primitive_index = i % num_primitives;
+            const auto x = input[output_idx];
+
+            if(primitive_index < gaussian_colors.size(0)){
+                const float g_x = (x[0] - gaussian_means[primitive_index][0]) * gaussian_mats[primitive_index][0][0] +
+                        (x[1] - gaussian_means[primitive_index][1]) * gaussian_mats[primitive_index][1][0];
+                const float g_y = (x[0] - gaussian_means[primitive_index][0]) * gaussian_mats[primitive_index][0][1] + 
+                        (x[1] - gaussian_means[primitive_index][1]) * gaussian_mats[primitive_index][1][1];
+                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
+                if(g>0.000001f) for (int k = 0; k < output.size(1); k++){ atomicAdd(&output[output_idx][k], g*gaussian_colors[primitive_index][k]); }
+                //if(g>0.000001f) for (int k = 0; k < output.size(1); k++){ output[output_idx][k] += g*gaussian_colors[primitive_index][k]; }
+
+            }
+            else{
+                primitive_index -= gaussian_colors.size(0);
+                const float g_x = (x[0] - wave_means[primitive_index][0]) * wave_mats[primitive_index][0][0] +
+                            (x[1] - wave_means[primitive_index][1]) * wave_mats[primitive_index][1][0];
+                const float g_y = (x[0] - wave_means[primitive_index][0]) * wave_mats[primitive_index][0][1] + 
+                        (x[1] - wave_means[primitive_index][1]) * wave_mats[primitive_index][1][1];
+                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
+                const float sx = sinf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
+                const float sy = sinf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
+                const float cx = cosf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
+                const float cy = cosf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
+                const float w = wave_coefficients[primitive_index][0]*cx*cy +
+                    wave_coefficients[primitive_index][1]*cx*sy +
+                    wave_coefficients[primitive_index][2]*sx*cy +
+                    wave_coefficients[primitive_index][3]*sx*sy +
+                    wave_coefficients[primitive_index][4];                               
+                //if(abs(g*w)>0.000001f) for (int k = 0; k < output.size(1); k++){ output[output_idx][k] += g*w*wave_colors[primitive_index][k]; }
+                if(abs(g*w)>0.000001f) for (int k = 0; k < output.size(1); k++){ atomicAdd(&output[output_idx][k], g*w*wave_colors[primitive_index][k]); }
+            }
         }
     }
 
     
     template <typename scalar_t>
     __global__ void hybrid_model_backward_cuda_kernel(
-    const int batch_size, 
-    const int num_gaussians,
-    const int num_waves,
-    const int num_channels,
-    const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> input,
-    const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> gaussian_means,
-    const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> gaussian_mats,
-    const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> gaussian_colors,
-    const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_means,
-    const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> wave_mats,
-    const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_frequencies,
-    const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_coefficients,
-    const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_colors,
-    const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_gaussian_means,
-    const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> grad_gaussian_mats,
-    const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_gaussian_colors,
-    const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_means,
-    const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> grad_wave_mats,
-    const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_frequencies,
-    const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_coefficients,
-    const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_colors,
-    torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> output) {
-        return;
+        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_output,
+        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> input,
+        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> gaussian_colors,
+        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> gaussian_means,
+        const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> gaussian_mats,
+        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_colors,
+        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_means,
+        const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> wave_mats,
+        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_frequencies,
+        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_coefficients,
+        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_gaussian_colors,
+        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_gaussian_means,
+        torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> grad_gaussian_mats,
+        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_colors,
+        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_means,
+        torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> grad_wave_mats,
+        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_frequencies,
+        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_coefficients
+        ) {
+            
+        const float TWO_PI = 2.0f*3.1415926f;
+
+        // Get block/thread related numbers   
+        const int index = blockIdx.x * blockDim.x + threadIdx.x;
+        const int stride = blockDim.x * gridDim.x;
+        const int num_primitives = gaussian_colors.size(0) + wave_colors.size(0);
+
+        for (int i = index; i < input.size(0)*num_primitives; i += stride){
+            const int output_idx = i / num_primitives;
+
+            // Check if we're out of bounds and return if so
+            if(output_idx>input.size(0)) return;
+
+            int primitive_index = i % num_primitives;
+            const auto x = input[output_idx];
+            const auto y = grad_output[output_idx];
+
+            if(primitive_index < gaussian_colors.size(0)){
+                const float g_x = (x[0] - gaussian_means[primitive_index][0]) * gaussian_mats[primitive_index][0][0] +
+                        (x[1] - gaussian_means[primitive_index][1]) * gaussian_mats[primitive_index][1][0];
+                const float g_y = (x[0] - gaussian_means[primitive_index][0]) * gaussian_mats[primitive_index][0][1] + 
+                        (x[1] - gaussian_means[primitive_index][1]) * gaussian_mats[primitive_index][1][1];
+                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
+                if(g>0.000001f) for (int k = 0; k < grad_output.size(1); k++){ 
+                    atomicAdd(&grad_gaussian_colors[output_idx][k], y[k]*g); 
+                }
+            }
+            else{
+                primitive_index -= gaussian_colors.size(0);
+                const float g_x = (x[0] - wave_means[primitive_index][0]) * wave_mats[primitive_index][0][0] +
+                            (x[1] - wave_means[primitive_index][1]) * wave_mats[primitive_index][1][0];
+                const float g_y = (x[0] - wave_means[primitive_index][0]) * wave_mats[primitive_index][0][1] + 
+                        (x[1] - wave_means[primitive_index][1]) * wave_mats[primitive_index][1][1];
+                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
+                const float sx = sinf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
+                const float sy = sinf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
+                const float cx = cosf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
+                const float cy = cosf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
+                const float w = wave_coefficients[primitive_index][0]*cx*cy +
+                    wave_coefficients[primitive_index][1]*cx*sy +
+                    wave_coefficients[primitive_index][2]*sx*cy +
+                    wave_coefficients[primitive_index][3]*sx*sy +
+                    wave_coefficients[primitive_index][4];                               
+                if(abs(g*w)>0.000001f) for (int k = 0; k < grad_output.size(1); k++){ 
+                    atomicAdd(&grad_wave_colors[output_idx][k], y[k]*g*w); 
+                }
+            }
+        }
     }
     
-
-
-
 }
 
 std::vector<torch::Tensor> hybrid_model_forward_cuda(
@@ -90,8 +163,8 @@ std::vector<torch::Tensor> hybrid_model_forward_cuda(
     auto output = torch::zeros({batch_size, output_size}, input.device());
 
     // Define block size and threads per block
-    const int threads = 1024;
-    const int blocks = (batch_size + threads - 1) / threads;
+    const int threads = 256;
+    const int blocks = (batch_size*(num_gaussians+num_waves) + threads - 1) / threads;
 
     // Dispatch jobs
     AT_DISPATCH_FLOATING_TYPES(input.type(), "hybrid_model_cuda_forward", ([&] {
@@ -114,23 +187,63 @@ std::vector<torch::Tensor> hybrid_model_forward_cuda(
 
 
 std::vector<torch::Tensor> hybrid_model_backward_cuda(
-    torch::Tensor input, // [N, 2]
-    torch::Tensor gaussian_means, // [M, 2]
-    torch::Tensor gaussian_mats, // [M, 2, 2]
-    torch::Tensor gaussian_colors, // [M, 3]
-    torch::Tensor wave_means, // [W, 2]
-    torch::Tensor wave_mats, // [W, 2, 2]
-    torch::Tensor wave_frequencies, // [W, 2]
-    torch::Tensor wave_coefficients, // [W, 5]
-    torch::Tensor wave_colors,    // [W, 3]
-    torch::Tensor grad_gaussian_means, // [M, 2]
-    torch::Tensor grad_gaussian_mats, // [M, 2, 2]
-    torch::Tensor grad_gaussian_colors, // [M, 3]
-    torch::Tensor grad_wave_means, // [W, 2]
-    torch::Tensor grad_wave_mats, // [W, 2, 2]
-    torch::Tensor grad_wave_frequencies, // [W, 2]
-    torch::Tensor grad_wave_coefficients, // [W, 5]
-    torch::Tensor grad_wave_colors) {
-        auto output = torch::zeros({1});
-        return {output};
+    torch::Tensor grad_output,          // [N, n_chans]
+    torch::Tensor input,                // [N, n_dims]
+    torch::Tensor gaussian_colors,      // [M, n_chans]
+    torch::Tensor gaussian_means,       // [M, n_dims]
+    torch::Tensor gaussian_mats,        // [M, n_dims, n_dims]
+    torch::Tensor wave_colors,          // [W, n_chans]
+    torch::Tensor wave_means,           // [W, n_dims]
+    torch::Tensor wave_mats,            // [W, n_dims, n_dims]
+    torch::Tensor wave_frequencies,     // [W, n_dims]
+    torch::Tensor wave_coefficients     // [W, 5]
+    ) {
+        // Info for launching CUDA kernel
+        const int batch_size = input.size(0);
+        const int num_gaussians = gaussian_means.size(0);
+        const int num_waves = wave_means.size(0);
+        const int output_size = gaussian_colors.size(1);
+
+        // Set up gradient tensors
+        // auto grad_input = torch::zeros_like(input);
+        auto grad_gaussian_colors = torch::zeros_like(gaussian_colors);
+        auto grad_gaussian_means = torch::zeros_like(gaussian_means); 
+        auto grad_gaussian_mats = torch::zeros_like(gaussian_mats); 
+        auto grad_wave_colors = torch::zeros_like(wave_colors);
+        auto grad_wave_means = torch::zeros_like(wave_means);
+        auto grad_wave_mats = torch::zeros_like(wave_mats);
+        auto grad_wave_frequencies = torch::zeros_like(wave_frequencies); 
+        auto grad_wave_coefficients = torch::zeros_like(wave_coefficients);
+
+        // Define block size and threads per block
+        const int threads = 256;
+        const int blocks = (batch_size*(num_gaussians+num_waves) + threads - 1) / threads;
+
+        // Dispatch jobs
+        AT_DISPATCH_FLOATING_TYPES(input.type(), "hybrid_model_cuda_backward", ([&] {
+        hybrid_model_backward_cuda_kernel<scalar_t><<<blocks, threads>>>(
+            grad_output.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
+            input.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
+            gaussian_colors.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
+            gaussian_means.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
+            gaussian_mats.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
+            wave_colors.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
+            wave_means.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
+            wave_mats.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
+            wave_frequencies.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
+            wave_coefficients.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
+            grad_gaussian_colors.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
+            grad_gaussian_means.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
+            grad_gaussian_mats.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
+            grad_wave_colors.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
+            grad_wave_means.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
+            grad_wave_mats.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
+            grad_wave_frequencies.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
+            grad_wave_coefficients.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>()
+            );
+        }));
+        
+        return {grad_gaussian_colors, grad_gaussian_means, grad_gaussian_mats,
+                grad_wave_colors, grad_wave_means, grad_wave_mats, 
+                grad_wave_frequencies, grad_wave_coefficients};
     }

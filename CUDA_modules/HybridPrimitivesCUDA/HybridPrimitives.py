@@ -12,21 +12,41 @@ class HybridPrimitivesFunction(torch.autograd.Function):
     def forward(ctx, x, gaussian_colors, gaussian_means, gaussian_mats,
             wave_colors, wave_support_means, wave_support_mats, 
             wave_frequencies, wave_coefficients):
+        """
+        In the forward pass we receive a Tensor containing the input and return
+        a Tensor containing the output. ctx is a context object that can be used
+        to stash information for backward computation. You can cache arbitrary
+        objects for use in the backward pass using the ctx.save_for_backward method.
+        """
         outputs = hybrid_primitives.forward(x, 
             gaussian_colors, gaussian_means, gaussian_mats,
             wave_colors, wave_support_means, wave_support_mats, 
             wave_frequencies, wave_coefficients)
         result = outputs[0]
-        #variables = outputs[1:] + [weights]
-        #ctx.save_for_backward(*variables)
+
+        variables = [x, gaussian_colors, gaussian_means, gaussian_mats,
+            wave_colors, wave_support_means, wave_support_mats, 
+            wave_frequencies, wave_coefficients]
+        ctx.save_for_backward(*variables)
+
         return result
 
     @staticmethod
-    def backward(ctx, grad_h, grad_cell):
-        outputs = hybrid_primitives.backward(
-            grad_h.contiguous(), grad_cell.contiguous(), *ctx.saved_tensors)
-        d_old_h, d_input, d_weights, d_bias, d_old_cell = outputs
-        return d_input, d_weights, d_bias, d_old_h, d_old_cell
+    def backward(ctx, grad_output):
+        """
+        In the backward pass we receive a Tensor containing the gradient of the loss
+        with respect to the output, and we need to compute the gradient of the loss
+        with respect to the input.
+        """
+        
+        outputs = hybrid_primitives.backward(grad_output, *ctx.saved_tensors)
+        
+        grad_gaussian_colors, grad_gaussian_means, grad_gaussian_mats, \
+                grad_wave_colors, grad_wave_means, grad_wave_mats, \
+                grad_wave_frequencies, grad_wave_coefficients = outputs
+        return grad_output, grad_gaussian_colors, grad_gaussian_means, grad_gaussian_mats, \
+                grad_wave_colors, grad_wave_means, grad_wave_mats, \
+                grad_wave_frequencies, grad_wave_coefficients
 
 
 class HybridPrimitives(torch.nn.Module):
@@ -75,7 +95,7 @@ class HybridPrimitives(torch.nn.Module):
         new_means = torch.rand([num_gaussians, self.num_dimensions], 
                 dtype=torch.float32, device=self.device)
         new_mats = torch.eye(self.num_dimensions, device=self.device, 
-                dtype=torch.float32)[None,...].repeat(num_gaussians, 1, 1) * (num_gaussians**2)
+                dtype=torch.float32)[None,...].repeat(num_gaussians, 1, 1) * 50
         new_mats += torch.randn_like(new_mats)*0.1
 
         tensor_dict = {
@@ -90,13 +110,13 @@ class HybridPrimitives(torch.nn.Module):
         self.gaussian_means = updated_params['gaussian_means']
         self.gaussian_mats = updated_params['gaussian_mats']
 
-    def add_wave(self, num_waves):
+    def add_waves(self, num_waves):
         new_colors = 0.2*(torch.randn([num_waves, self.num_channels], 
                 dtype=torch.float32, device=self.device))
         new_means = torch.rand([num_waves, self.num_dimensions], 
                 dtype=torch.float32, device=self.device)
         new_mats = torch.eye(self.num_dimensions, device=self.device, 
-                dtype=torch.float32)[None,...].repeat(num_waves, 1, 1) * (num_waves**2)
+                dtype=torch.float32)[None,...].repeat(num_waves, 1, 1) * 50
         new_mats += torch.randn_like(new_mats)*0.1
         new_frequencies = torch.rand([num_waves, self.num_dimensions],
                 dtype=torch.float32, device=self.device)
@@ -192,7 +212,7 @@ class HybridPrimitives(torch.nn.Module):
                 self.wave_support_mats = updated_params['wave_support_mats']
                 self.wave_support_means = updated_params['wave_support_means']
 
-    def forward(self, x):
+    def forward(self, x) -> torch.Tensor:
         return HybridPrimitivesFunction.apply(x, 
             self.gaussian_colors, self.gaussian_means, self.gaussian_mats,
             self.wave_colors, self.wave_support_means, self.wave_support_mats, 
@@ -212,7 +232,7 @@ class HybridPrimitives(torch.nn.Module):
             # Transform each query by the supporting gassians covariance matrix
             # **10 for the harder edges (square-like)
             # [N, n_gaussians, 2, 1] x [1, n_gaussians, 2, 2] x [N, n_gaussians, 2, 1]
-            transformed_x = ((rel_x[...,None].mT @ self.wave_support_mats[None,...])**10).sum(dim=-1, keepdim=True)
+            transformed_x = ((rel_x[...,None].mT @ self.wave_support_mats[None,...])**2).sum(dim=-1, keepdim=True)
 
             # Exponential support
             # [N, n_gaussians, 1, 1]

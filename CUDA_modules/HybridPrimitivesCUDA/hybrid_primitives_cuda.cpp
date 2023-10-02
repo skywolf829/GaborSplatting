@@ -16,23 +16,17 @@ std::vector<torch::Tensor> hybrid_model_forward_cuda(
 );
 
 std::vector<torch::Tensor> hybrid_model_backward_cuda(
-    torch::Tensor input,                    // [N, 2]
-    torch::Tensor gaussian_means,           // [M, 2]
-    torch::Tensor gaussian_mats,            // [M, 2, 2]
-    torch::Tensor gaussian_colors,          // [M, 3]
-    torch::Tensor wave_means,               // [W, 2]
-    torch::Tensor wave_mats,                // [W, 2, 2]
-    torch::Tensor wave_frequencies,         // [W, 2]
-    torch::Tensor wave_coefficients,        // [W, 5]
-    torch::Tensor wave_colors,              // [W, 3]
-    torch::Tensor grad_gaussian_means,      // [M, 2]
-    torch::Tensor grad_gaussian_mats,       // [M, 2, 2]
-    torch::Tensor grad_gaussian_colors,     // [M, 3]
-    torch::Tensor grad_wave_means,          // [W, 2]
-    torch::Tensor grad_wave_mats,           // [W, 2, 2]
-    torch::Tensor grad_wave_frequencies,    // [W, 2]
-    torch::Tensor grad_wave_coefficients,   // [W, 5]
-    torch::Tensor grad_wave_colors);        // [W, 3]
+    torch::Tensor grad_output,          // [N, n_chan]
+    torch::Tensor input,                // [N, n_dim]
+    torch::Tensor gaussian_colors,      // [M, n_chan]
+    torch::Tensor gaussian_means,       // [M, n_dim]
+    torch::Tensor gaussian_mats,        // [M, n_dim, n_dim]
+    torch::Tensor wave_colors,          // [W, n_chan]
+    torch::Tensor wave_means,           // [W, n_dim]
+    torch::Tensor wave_mats,            // [W, n_dim, n_dim]
+    torch::Tensor wave_frequencies,     // [W, n_dim]
+    torch::Tensor wave_coefficients     // [W, 5]
+    );        
 
 // C++ interface
 
@@ -75,23 +69,18 @@ std::vector<torch::Tensor> hybrid_model_forward(
 
 
 std::vector<torch::Tensor> hybrid_model_backward(
-    torch::Tensor input,                    // [N, 2]
-    torch::Tensor gaussian_means,           // [M, 2]
-    torch::Tensor gaussian_mats,            // [M, 2, 2]
-    torch::Tensor gaussian_colors,          // [M, 3]
-    torch::Tensor wave_means,               // [W, 2]
-    torch::Tensor wave_mats,                // [W, 2, 2]
-    torch::Tensor wave_frequencies,         // [W, 2]
-    torch::Tensor wave_coefficients,        // [W, 5]
-    torch::Tensor wave_colors,              // [W, 3]
-    torch::Tensor grad_gaussian_means,      // [M, 2]
-    torch::Tensor grad_gaussian_mats,       // [M, 2, 2]
-    torch::Tensor grad_gaussian_colors,     // [M, 3]
-    torch::Tensor grad_wave_means,          // [W, 2]
-    torch::Tensor grad_wave_mats,           // [W, 2, 2]
-    torch::Tensor grad_wave_frequencies,    // [W, 2]
-    torch::Tensor grad_wave_coefficients,   // [W, 5]
-    torch::Tensor grad_wave_colors) {
+    torch::Tensor grad_output,          // [N, n_chans]
+    torch::Tensor input,                // [N, n_dims]
+    torch::Tensor gaussian_colors,      // [M, n_chans]
+    torch::Tensor gaussian_means,       // [M, n_dims]
+    torch::Tensor gaussian_mats,        // [M, n_dims, n_dims]
+    torch::Tensor wave_colors,          // [W, n_chans]
+    torch::Tensor wave_means,           // [W, n_dims]
+    torch::Tensor wave_mats,            // [W, n_dims, n_dims]
+    torch::Tensor wave_frequencies,     // [W, n_dims]
+    torch::Tensor wave_coefficients     // [W, 5]
+    ) {
+    CHECK_INPUT(grad_output);
     CHECK_INPUT(input);
     CHECK_INPUT(gaussian_means);
     CHECK_INPUT(gaussian_mats);
@@ -101,33 +90,19 @@ std::vector<torch::Tensor> hybrid_model_backward(
     CHECK_INPUT(wave_frequencies);
     CHECK_INPUT(wave_coefficients);
     CHECK_INPUT(wave_colors);
-    CHECK_INPUT(grad_gaussian_means);
-    CHECK_INPUT(grad_gaussian_mats);
-    CHECK_INPUT(grad_gaussian_colors);
-    CHECK_INPUT(grad_wave_means);
-    CHECK_INPUT(grad_wave_mats);
-    CHECK_INPUT(grad_wave_frequencies);
-    CHECK_INPUT(grad_wave_coefficients);
-    CHECK_INPUT(grad_wave_colors);
 
     return hybrid_model_backward_cuda(
+        grad_output, 
         input,
-        gaussian_means,
-        gaussian_mats,
-        gaussian_colors, 
+        gaussian_colors,
+        gaussian_means, 
+        gaussian_mats,  
+        wave_colors,
         wave_means, 
         wave_mats, 
         wave_frequencies, 
-        wave_coefficients,
-        wave_colors,    
-        grad_gaussian_means,
-        grad_gaussian_mats,
-        grad_gaussian_colors, 
-        grad_wave_means, 
-        grad_wave_mats,
-        grad_wave_frequencies,
-        grad_wave_coefficients,
-        grad_wave_colors);
+        wave_coefficients
+        );
 }
 
 
