@@ -5,6 +5,9 @@ from models.PeriodicGaussians2D import PeriodicGaussians2D
 from models.PeriodicGaussianField import PeriodicGaussianField
 from models.SupportedPeriodicPrimitives2D import SupportedPeriodicPrimitives2D
 from models.PeriodicGaussians2Dfreqangle import PeriodicGaussians2Dfreqangle
+print("Loading HybridPrimitives CUDA kernel. May need to compile...")
+from models.HybridPrimitives import HybridPrimitives
+print("Successfully loaded HybridPrimitives.")
 from models.HaarPrimitives2D import HaarPrimitives2D
 from models.Siren import Siren
 from utils.data_generators import load_img
@@ -26,7 +29,7 @@ if __name__ == '__main__':
     primitives_per_update = 5
     iters_per_primitive = int((total_iters-fine_tune_iters) / (total_primitives/primitives_per_update))
     
-    model_type = HybridPrimitiveModel
+    model_type = HybridPrimitives
     img_name = "redblack_tablecloth.jpg"
 
     device = "cuda"
@@ -35,7 +38,7 @@ if __name__ == '__main__':
     training_img = load_img("./data/"+img_name)
     training_img_copy = (training_img.copy() * 255).astype(np.uint8)
     og_img_shape = training_img.shape
-    model = model_type(total_primitives, device=device, n_channels=3)
+    model = model_type(device=device, n_channels=3)
 
     g_x = torch.arange(0, og_img_shape[0], dtype=torch.float32, device=device) / (og_img_shape[0]-1)
     g_y = torch.arange(0, og_img_shape[1], dtype=torch.float32, device=device) / (og_img_shape[1]-1)
@@ -110,11 +113,11 @@ if __name__ == '__main__':
                 if(i>0):
                     residuals -= model(x[mask])
                 model.prune_primitives(1./500.)
-                #n_waves = primitives_per_update
+                n_waves = 0
                 #n_gaussians = 0
-                n_waves = 0 if i < 1000 else primitives_per_update
-                n_gaussians = primitives_per_update-n_waves
-                #n_gaussians = primitives_per_update
+                #n_waves = 0 if i < 1000 else primitives_per_update
+                #n_gaussians = primitives_per_update-n_waves
+                n_gaussians = primitives_per_update
                 n_extracted_peaks = model.add_primitives(
                                     x[mask],
                                     residuals,
@@ -155,11 +158,12 @@ if __name__ == '__main__':
         #    model.subgaussian_flat_top_power.clamp_(-1, 3)
             
         # logging
-        with torch.no_grad():     
-            writer.add_scalar("Loss", losses['final_loss'].item(), i)     
-            p = 20*np.log10(1.0) - 10*torch.log10(losses['mse'])
-            writer.add_scalar("Train PSNR", p, i)        
-            t.set_description(f"[{i+1}/{total_iters}] PSNR: {p.item():0.04f}")
+        if i % 100 == 0:
+            with torch.no_grad():     
+                writer.add_scalar("Loss", losses['final_loss'].item(), i)     
+                p = 20*np.log10(1.0) - 10*torch.log10(losses['mse'])
+                writer.add_scalar("Train PSNR", p, i)        
+                t.set_description(f"[{i+1}/{total_iters}] PSNR: {p.item():0.04f}")
     #print(p.key_averages().table(
     #    sort_by="self_cuda_time_total", row_limit=-1))
     

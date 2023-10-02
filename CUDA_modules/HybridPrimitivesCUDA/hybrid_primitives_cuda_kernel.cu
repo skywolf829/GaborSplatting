@@ -112,8 +112,29 @@ namespace{
                 const float g_y = (x[0] - gaussian_means[primitive_index][0]) * gaussian_mats[primitive_index][0][1] + 
                         (x[1] - gaussian_means[primitive_index][1]) * gaussian_mats[primitive_index][1][1];
                 const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
-                if(g>0.000001f) for (int k = 0; k < grad_output.size(1); k++){ 
-                    atomicAdd(&grad_gaussian_colors[output_idx][k], y[k]*g); 
+                if(g>0.000000001f) {
+                    for (int k = 0; k < grad_output.size(1); k++){ 
+                        // Gaussian color gradient update
+                        atomicAdd(&grad_gaussian_colors[primitive_index][k], y[k]*g); 
+
+                        // Gaussian position gradient update
+                        atomicAdd(&grad_gaussian_means[primitive_index][0], 
+                            y[k]*g*gaussian_colors[primitive_index][k]*
+                            (g_x*gaussian_mats[primitive_index][0][0]+g_y*gaussian_mats[primitive_index][0][1]));
+                        atomicAdd(&grad_gaussian_means[primitive_index][1], 
+                            y[k]*g*gaussian_colors[primitive_index][k]*
+                            (g_x*gaussian_mats[primitive_index][1][0]+g_y*gaussian_mats[primitive_index][1][1]));
+                            
+                        // Gaussian covariance matrix update
+                        atomicAdd(&grad_gaussian_mats[primitive_index][0][0], 
+                            y[k]*g*gaussian_colors[primitive_index][k]*g_x*-(x[0] - gaussian_means[primitive_index][0]));
+                        atomicAdd(&grad_gaussian_mats[primitive_index][0][1], 
+                            y[k]*g*gaussian_colors[primitive_index][k]*g_y*-(x[0] - gaussian_means[primitive_index][0]));
+                        atomicAdd(&grad_gaussian_mats[primitive_index][1][0], 
+                            y[k]*g*gaussian_colors[primitive_index][k]*g_x*-(x[1] - gaussian_means[primitive_index][1]));
+                        atomicAdd(&grad_gaussian_mats[primitive_index][1][1], 
+                            y[k]*g*gaussian_colors[primitive_index][k]*g_y*-(x[1] - gaussian_means[primitive_index][1]));
+                    }
                 }
             }
             else{
@@ -123,22 +144,66 @@ namespace{
                 const float g_y = (x[0] - wave_means[primitive_index][0]) * wave_mats[primitive_index][0][1] + 
                         (x[1] - wave_means[primitive_index][1]) * wave_mats[primitive_index][1][1];
                 const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
-                const float sx = sinf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
-                const float sy = sinf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
-                const float cx = cosf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
-                const float cy = cosf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
-                const float w = wave_coefficients[primitive_index][0]*cx*cy +
-                    wave_coefficients[primitive_index][1]*cx*sy +
-                    wave_coefficients[primitive_index][2]*sx*cy +
-                    wave_coefficients[primitive_index][3]*sx*sy +
-                    wave_coefficients[primitive_index][4];                               
-                if(abs(g*w)>0.000001f) for (int k = 0; k < grad_output.size(1); k++){ 
-                    atomicAdd(&grad_wave_colors[output_idx][k], y[k]*g*w); 
+                                              
+                if(g>0.0000000001f){
+                    const float sx = sinf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
+                    const float sy = sinf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
+                    const float cx = cosf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
+                    const float cy = cosf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
+                    const float w = wave_coefficients[primitive_index][0]*cx*cy +
+                        wave_coefficients[primitive_index][1]*cx*sy +
+                        wave_coefficients[primitive_index][2]*sx*cy +
+                        wave_coefficients[primitive_index][3]*sx*sy +
+                        wave_coefficients[primitive_index][4]; 
+                    for (int k = 0; k < grad_output.size(1); k++){ 
+                        // Wave color gradient update
+                        atomicAdd(&grad_wave_colors[primitive_index][k], y[k]*g*w); 
+                        
+                        // Wave position gradient update
+                        atomicAdd(&grad_wave_means[primitive_index][0], 
+                            y[k]*w*g*wave_colors[primitive_index][k]*
+                            (g_x*wave_mats[primitive_index][0][0]+g_y*wave_mats[primitive_index][0][1]));
+                        atomicAdd(&grad_wave_means[primitive_index][1], 
+                            y[k]*w*g*wave_colors[primitive_index][k]*
+                            (g_x*wave_mats[primitive_index][1][0]+g_y*wave_mats[primitive_index][1][1]));
+                            
+                        // Wave covariance matrix gradient update
+                        atomicAdd(&grad_wave_mats[primitive_index][0][0], 
+                            y[k]*w*g*wave_colors[primitive_index][k]*g_x*-(x[0] - wave_means[primitive_index][0]));
+                        atomicAdd(&grad_wave_mats[primitive_index][0][1], 
+                            y[k]*w*g*wave_colors[primitive_index][k]*g_y*-(x[0] - wave_means[primitive_index][0]));
+                        atomicAdd(&grad_wave_mats[primitive_index][1][0], 
+                            y[k]*w*g*wave_colors[primitive_index][k]*g_x*-(x[1] - wave_means[primitive_index][1]));
+                        atomicAdd(&grad_wave_mats[primitive_index][1][1], 
+                            y[k]*w*g*wave_colors[primitive_index][k]*g_y*-(x[1] - wave_means[primitive_index][1]));
+
+                        // Wave coefficients gradient update
+                        atomicAdd(&grad_wave_coefficients[primitive_index][0], y[k]*g*cx*cy*wave_colors[primitive_index][k]);
+                        atomicAdd(&grad_wave_coefficients[primitive_index][1], y[k]*g*cx*sy*wave_colors[primitive_index][k]);
+                        atomicAdd(&grad_wave_coefficients[primitive_index][2], y[k]*g*sx*cy*wave_colors[primitive_index][k]);
+                        atomicAdd(&grad_wave_coefficients[primitive_index][3], y[k]*g*sx*sy*wave_colors[primitive_index][k]);
+                        atomicAdd(&grad_wave_coefficients[primitive_index][4], y[k]*g*wave_colors[primitive_index][k]);
+
+                        // Wave frequency gradient update
+                        atomicAdd(&grad_wave_frequencies[primitive_index][0], 
+                            y[k]*g*TWO_PI*x[0]*wave_colors[primitive_index][k]*(
+                                wave_coefficients[primitive_index][0]*cy*-sx +
+                                wave_coefficients[primitive_index][1]*sy*-sx +
+                                wave_coefficients[primitive_index][2]*cy*cx +
+                                wave_coefficients[primitive_index][3]*sy*cx
+                            ));
+                        atomicAdd(&grad_wave_frequencies[primitive_index][1], 
+                            y[k]*g*TWO_PI*x[1]*wave_colors[primitive_index][k]*(
+                                wave_coefficients[primitive_index][0]*cx*-sy +
+                                wave_coefficients[primitive_index][1]*cx*cy +
+                                wave_coefficients[primitive_index][2]*sx*-sy +
+                                wave_coefficients[primitive_index][3]*sx*cy
+                            ));
+                    }
                 }
             }
         }
-    }
-    
+    } 
 }
 
 std::vector<torch::Tensor> hybrid_model_forward_cuda(

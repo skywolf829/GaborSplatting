@@ -2,10 +2,13 @@ import torch
 from torch.utils.cpp_extension import load
 from torch.nn import Parameter
 import os
+from models.LombScargle2D import LombScargle2D
 
 hybrid_primitives = load(name='hybrid_primitives', 
-                    sources=[os.path.join("/".join(__file__.split('/')[0:-1]), 'hybrid_primitives_cuda.cpp'), 
-                             os.path.join("/".join(__file__.split('/')[0:-1]), 'hybrid_primitives_cuda_kernel.cu')])
+                    sources=[os.path.join("/".join(__file__.split('/')[0:-1]),"..", "CUDA_Modules", 
+                                          "HybridPrimitivesCUDA", 'hybrid_primitives_cuda.cpp'), 
+                             os.path.join("/".join(__file__.split('/')[0:-1]),"..", "CUDA_Modules", 
+                                          "HybridPrimitivesCUDA", 'hybrid_primitives_cuda_kernel.cu')])
 
 class HybridPrimitivesFunction(torch.autograd.Function):
     @staticmethod
@@ -50,17 +53,17 @@ class HybridPrimitivesFunction(torch.autograd.Function):
 
 
 class HybridPrimitives(torch.nn.Module):
-    def __init__(self, num_dimensions=2, num_channels=3, device="cuda"):
+    def __init__(self, num_dimensions=2, n_channels=3, device="cuda"):
         super(HybridPrimitives, self).__init__()
         self.device = device
         self.num_dimensions = num_dimensions
-        self.num_channels = num_channels
+        self.n_channels = n_channels
 
-        self.gaussian_colors = Parameter(torch.empty([0, num_channels], device=device, dtype=torch.float32)) 
+        self.gaussian_colors = Parameter(torch.empty([0, n_channels], device=device, dtype=torch.float32)) 
         self.gaussian_means = Parameter(torch.empty([0, num_dimensions], device=device, dtype=torch.float32))        
         self.gaussian_mats = Parameter(torch.empty([0, num_dimensions, num_dimensions], device=device, dtype=torch.float32))
         
-        self.wave_colors = Parameter(torch.empty([0, num_channels], device=device, dtype=torch.float32))
+        self.wave_colors = Parameter(torch.empty([0, n_channels], device=device, dtype=torch.float32))
         self.wave_support_means = Parameter(torch.empty([0, num_dimensions], device=device, dtype=torch.float32))        
         self.wave_support_mats = Parameter(torch.empty([0, num_dimensions, num_dimensions], device=device, dtype=torch.float32))
         self.wave_frequencies = Parameter(torch.empty([0, num_dimensions], device=device, dtype=torch.float32))    
@@ -89,8 +92,8 @@ class HybridPrimitives(torch.nn.Module):
             total += group['params'][0].numel()
         return total
     
-    def add_gaussians(self, num_gaussians):
-        new_colors = 0.2*(torch.randn([num_gaussians, self.num_channels], 
+    def add_random_gaussians(self, num_gaussians):
+        new_colors = 0.2*(torch.randn([num_gaussians, self.n_channels], 
                 dtype=torch.float32, device=self.device))
         new_means = torch.rand([num_gaussians, self.num_dimensions], 
                 dtype=torch.float32, device=self.device)
@@ -110,8 +113,8 @@ class HybridPrimitives(torch.nn.Module):
         self.gaussian_means = updated_params['gaussian_means']
         self.gaussian_mats = updated_params['gaussian_mats']
 
-    def add_waves(self, num_waves):
-        new_colors = 0.2*(torch.randn([num_waves, self.num_channels], 
+    def add_random_waves(self, num_waves):
+        new_colors = 0.2*(torch.randn([num_waves, self.n_channels], 
                 dtype=torch.float32, device=self.device))
         new_means = torch.rand([num_waves, self.num_dimensions], 
                 dtype=torch.float32, device=self.device)
@@ -144,6 +147,60 @@ class HybridPrimitives(torch.nn.Module):
     
     def get_num_gaussians(self):
         return self.gaussian_colors.shape[0]
+    
+    def add_primitives(self, x, y, n_freqs=256, 
+                       freq_decay = 1.0, min_influence=1./255.,
+                       num_waves=1, num_gaussians=0):
+        #plt.scatter(x.cpu().numpy()[:,1], x.cpu().numpy()[:,0],c=y.cpu().numpy())
+        #plt.show()
+
+        if(num_waves > 0):
+            ls_model = LombScargle2D(x, y, n_terms=1, device=self.device)
+            # Randomize set of wavelengths and freqs to fit in correct range
+            freqs = 0.1+torch.sort(freq_decay*64*torch.rand([n_freqs], device=self.device, dtype=torch.float32)).values
+            
+            # Fit model and find peaks
+            ls_model.fit(freqs)            
+            self.data_periodogram = ls_model.get_power()
+            n_extracted_waves = ls_model.find_peaks(top_n=num_waves, 
+                                                    min_influence=min_influence)
+            self.ls_plot = ls_model.plot_power(return_img=True)
+            self.ls_power = ls_model.power
+            num_gaussians += num_waves - n_extracted_waves
+            if(n_extracted_waves > 0):
+                all_colors = ls_model.get_PCA_color()[None,:].repeat(n_extracted_waves, 1) / n_extracted_waves
+
+                all_frequencies = ls_model.get_peak_freqs()
+                coeffs = ls_model.get_peak_coeffs()[:,0,:]
+
+                means, vars = ls_model.get_peak_placement(torch.arange(0,n_extracted_waves,1,dtype=torch.long,device=self.device))
+                #means = means*0 + 0.5  
+                mats = torch.eye(2, device=self.device, dtype=torch.float32)[None,...].repeat(n_extracted_waves, 1, 1)
+                mats[:,0,0] = 1 / vars[:,0]
+                mats[:,1,1] = 1 / vars[:,1]
+
+                tensor_dict = {
+                    "wave_support_means": means, 
+                    "wave_support_mats": mats,
+                    "wave_frequencies": all_frequencies,
+                    "wave_coefficients": coeffs,
+                    "wave_colors": all_colors
+                }
+                updated_params = self.cat_tensors_to_optimizer(tensor_dict)
+
+                self.wave_support_means = updated_params['wave_support_means']
+                self.wave_support_mats = updated_params['wave_support_mats']
+                self.wave_frequencies = updated_params['wave_frequencies']
+                self.wave_coefficients = updated_params['wave_coefficients']
+                self.wave_colors = updated_params['wave_colors']
+
+        else:
+            n_extracted_waves = 0
+
+        if(num_gaussians > 0):
+            self.add_random_gaussians(num_gaussians)
+
+        return n_extracted_waves
     
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
@@ -211,6 +268,22 @@ class HybridPrimitives(torch.nn.Module):
                 self.wave_frequencies = updated_params['wave_frequencies']
                 self.wave_support_mats = updated_params['wave_support_mats']
                 self.wave_support_means = updated_params['wave_support_means']
+
+    def loss(self, x, y):
+        # x is our output, y is the ground truth
+        model_out = self(x)
+        mse = torch.nn.functional.mse_loss(model_out,y)
+        #if(self.gaussian_mats.shape[0] > 0):
+        #    shear_loss = 0.01*((self.gaussian_mats[:,1,0]+self.gaussian_mats[:,0,1])**2).mean()
+        #else:
+        #    shear_loss = 0
+        final_loss = mse #+ shear_loss+ decay_loss
+        losses = {
+            "final_loss": final_loss,
+            "mse": mse,
+        #    "shear_loss": shear_loss
+        }
+        return losses, model_out
 
     def forward(self, x) -> torch.Tensor:
         return HybridPrimitivesFunction.apply(x, 
