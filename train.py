@@ -23,12 +23,14 @@ from datetime import datetime
 
 if __name__ == '__main__':
     
-    total_iters = 2000
-    fine_tune_iters = 1000    
-    total_primitives = 100000
-    primitives_per_update = 50000
+    total_iters = 300000
+    fine_tune_iters = 5000    
+    total_primitives = 50000
+    primitives_per_update = 50
     iters_per_primitive = int((total_iters-fine_tune_iters) / (total_primitives/primitives_per_update))
-    
+    start_freq = 20
+    end_freq = 512
+
     model_type = HybridPrimitives
     img_name = "redblack_tablecloth.jpg"
 
@@ -87,7 +89,7 @@ if __name__ == '__main__':
         mask = torch.rand(x.shape[0], device=x.device, dtype=torch.float32) < pct_of_data
 
         # image logging
-        if i % 1000 == 0 and i > 0:
+        if i % 200 == 0 and i > 0:
             with torch.no_grad():
                 res = [512, 512]
                 xmin = x.min(dim=0).values
@@ -113,17 +115,17 @@ if __name__ == '__main__':
                 if(i>0):
                     residuals -= model(x[mask])
                 model.prune_primitives(1./500.)
-                n_waves = 0
+                #n_gaussians = primitives_per_update
+                #n_waves = 0
                 #n_gaussians = 0
-                #n_waves = 0 if i < 1000 else primitives_per_update
-                #n_gaussians = primitives_per_update-n_waves
-                n_gaussians = primitives_per_update
+                n_waves = primitives_per_update
+                n_gaussians = primitives_per_update-n_waves
                 n_extracted_peaks = model.add_primitives(
                                     x[mask],
                                     residuals,
                                     n_freqs = 180, 
                                     #n_angles = 180,
-                                    freq_decay=1.0075**((i//iters_per_primitive)*primitives_per_update), 
+                                    max_freq=(total_iters-i)*start_freq/total_iters+i*end_freq/total_iters, 
                                     min_influence=1./500.,
                                     num_waves = n_waves,
                                     num_gaussians = n_gaussians
@@ -164,6 +166,8 @@ if __name__ == '__main__':
                 p = 20*np.log10(1.0) - 10*torch.log10(losses['mse'])
                 writer.add_scalar("Train PSNR", p, i)        
                 t.set_description(f"[{i+1}/{total_iters}] PSNR: {p.item():0.04f}")
+                writer.add_scalar("Num gaussians", model.get_num_gaussians(), i)     
+                writer.add_scalar("Num waves", model.get_num_waves(), i)     
     #print(p.key_averages().table(
     #    sort_by="self_cuda_time_total", row_limit=-1))
     

@@ -73,15 +73,15 @@ class HybridPrimitives(torch.nn.Module):
     
     def create_optimizer(self):
         l = [
-            {'params': [self.gaussian_colors], 'lr': 0.01, "name": "gaussian_colors"},
-            {'params': [self.gaussian_means], 'lr': 0.01, "name": "gaussian_means"},
-            {'params': [self.gaussian_mats], 'lr': 0.01, "name": "gaussian_mats"},
+            {'params': [self.gaussian_colors], 'lr': 0.0001, "name": "gaussian_colors"},
+            {'params': [self.gaussian_means], 'lr': 0.0001, "name": "gaussian_means"},
+            {'params': [self.gaussian_mats], 'lr': 0.1, "name": "gaussian_mats"},
 
-            {'params': [self.wave_colors], 'lr': 0.001, "name": "wave_colors"},
-            {'params': [self.wave_support_means], 'lr': 0.001, "name": "wave_support_means"},
-            {'params': [self.wave_support_mats], 'lr': 0.001, "name": "wave_support_mats"},
-            {'params': [self.wave_frequencies], 'lr': 0.001, "name": "wave_frequencies"},
-            {'params': [self.wave_coefficients], 'lr': 0.001, "name": "wave_coefficients"},
+            {'params': [self.wave_colors], 'lr': 0.0001, "name": "wave_colors"},
+            {'params': [self.wave_support_means], 'lr': 0.0001, "name": "wave_support_means"},
+            {'params': [self.wave_support_mats], 'lr': 0.1, "name": "wave_support_mats"},
+            {'params': [self.wave_frequencies], 'lr': 0.0001, "name": "wave_frequencies"},
+            {'params': [self.wave_coefficients], 'lr': 0.0001, "name": "wave_coefficients"},
         ]
         optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         return optimizer
@@ -99,7 +99,7 @@ class HybridPrimitives(torch.nn.Module):
                 dtype=torch.float32, device=self.device)
         new_mats = torch.eye(self.num_dimensions, device=self.device, 
                 dtype=torch.float32)[None,...].repeat(num_gaussians, 1, 1) * 100
-        new_mats += torch.randn_like(new_mats)*0.1
+        new_mats += torch.randn_like(new_mats)*5
 
         tensor_dict = {
             "gaussian_colors": new_colors, 
@@ -149,7 +149,7 @@ class HybridPrimitives(torch.nn.Module):
         return self.gaussian_colors.shape[0]
     
     def add_primitives(self, x, y, n_freqs=256, 
-                       freq_decay = 1.0, min_influence=1./255.,
+                       max_freq = 128.0, min_influence=1./255.,
                        num_waves=1, num_gaussians=0):
         #plt.scatter(x.cpu().numpy()[:,1], x.cpu().numpy()[:,0],c=y.cpu().numpy())
         #plt.show()
@@ -157,7 +157,7 @@ class HybridPrimitives(torch.nn.Module):
         if(num_waves > 0):
             ls_model = LombScargle2D(x, y, n_terms=1, device=self.device)
             # Randomize set of wavelengths and freqs to fit in correct range
-            freqs = 0.1+torch.sort(freq_decay*48*torch.rand([n_freqs], device=self.device, dtype=torch.float32)).values
+            freqs = 0.1+torch.sort(max_freq*torch.rand([n_freqs], device=self.device, dtype=torch.float32)).values
             
             # Fit model and find peaks
             ls_model.fit(freqs)            
@@ -244,8 +244,7 @@ class HybridPrimitives(torch.nn.Module):
         return optimizable_tensors
 
     def prune_primitives(self, min_contribution:int=1./255.):
-        if(self.gaussian_means.shape[0] == 0):
-            return
+
         gaussians_mask = torch.linalg.norm(self.gaussian_colors,dim=-1) > min_contribution
         waves_mask = (torch.linalg.norm(self.wave_colors,dim=-1) * \
                 torch.linalg.norm(self.wave_coefficients,dim=-1)) > min_contribution
@@ -258,6 +257,7 @@ class HybridPrimitives(torch.nn.Module):
                 self.gaussian_colors = updated_params['gaussian_colors']
                 self.gaussian_means = updated_params['gaussian_means']
                 self.gaussian_mats = updated_params['gaussian_mats']
+        
         if(len(waves_mask.shape)>0):
             to_remove = waves_mask.shape[0]-waves_mask.sum()
             if(to_remove>0):
@@ -294,7 +294,7 @@ class HybridPrimitives(torch.nn.Module):
     def forward_pytorch(self, x):
         # x is [N, 2]
         # gaussian coeffs
-        output = torch.zeros([x.shape[0], self.num_channels],
+        output = torch.zeros([x.shape[0], self.n_channels],
                              dtype=torch.float32, device=self.device)
 
         # Contributions from waves

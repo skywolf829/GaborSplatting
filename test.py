@@ -19,12 +19,12 @@ torch.manual_seed(7)
 test_iters = 10
 num_gaussians = 1000
 num_waves = 100
-num_points = 100000
+num_points = 10000
 num_dimensions = 2
 
 hp = HybridPrimitives()
-hp.add_gaussians(num_gaussians)
-hp.add_waves(num_waves)
+hp.add_random_gaussians(num_gaussians)
+hp.add_random_waves(num_waves)
 
 x = torch.rand([num_points, num_dimensions], device="cuda", dtype=torch.float32)
 
@@ -36,7 +36,10 @@ def forward_memory_test():
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     starting_memory = torch.cuda.max_memory_allocated()
-    _ = hp.forward_pytorch(x)
+    try:
+        _ = hp.forward_pytorch(x)
+    except RuntimeError as e:
+        print("Memory error - PyTorch exceeded the maximum GPU memory. Continuing test regardless.")
     ending_memory = torch.cuda.max_memory_allocated()
     pytorch_mem_use = ending_memory-starting_memory
     torch.cuda.empty_cache()
@@ -57,13 +60,21 @@ def backward_memory_test():
     print(f"=====================Memory test======================")
     print(f"======================================================")
 
+    print(f"Backward pass memory use (on top of parameters):")
+
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     starting_memory = torch.cuda.max_memory_allocated()
-    out = hp.forward_pytorch(x)
-    torch.abs(out).mean().backward()
-    ending_memory = torch.cuda.max_memory_allocated()
-    pytorch_mem_use = ending_memory-starting_memory
+    print(f"Static memory use:\t{starting_memory//1024**2}MB")
+    try:
+        out = hp.forward_pytorch(x)
+        torch.abs(out).mean().backward()
+        ending_memory = torch.cuda.max_memory_allocated()
+        pytorch_mem_use = ending_memory-starting_memory
+        print(f"PyTorch:\t\t{pytorch_mem_use//1024**2}MB")
+    except RuntimeError as e:
+        print("Memory error - PyTorch exceeded the maximum GPU memory. Continuing test regardless, stats may be incorrect.")
+    
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
     starting_memory = torch.cuda.max_memory_allocated()
@@ -72,9 +83,6 @@ def backward_memory_test():
     ending_memory = torch.cuda.max_memory_allocated()
     cuda_mem_use = ending_memory-starting_memory
 
-    print(f"Backward pass memory use (on top of parameters):")
-    print(f"Static memory use:\t{starting_memory//1024**2}MB")
-    print(f"PyTorch:\t\t{pytorch_mem_use//1024**2}MB")
     print(f"CUDA kernel:\t\t{cuda_mem_use//1024**2}MB")
     print(f"======================================================")
 
@@ -86,7 +94,11 @@ def forward_timing_test():
     t0 = time()
     torch.cuda.synchronize()
     for i in range(test_iters):
-        _ = hp.forward_pytorch(x)
+        try:
+            _ = hp.forward_pytorch(x)
+        except RuntimeError as e:
+            print("Memory error - PyTorch exceeded the maximum GPU memory. Continuing test regardless.")
+            break
     torch.cuda.synchronize()
     time_pytorch = time() - t0
 
@@ -111,7 +123,11 @@ def backward_timing_test():
     t0 = time()
     torch.cuda.synchronize()
     for i in range(test_iters):
-        out = hp.forward_pytorch(x)
+        try:
+            out = hp.forward_pytorch(x)
+        except RuntimeError as e:
+            print("Memory error - PyTorch exceeded the maximum GPU memory. Continuing test regardless.")
+            break
         out.mean().backward()
     torch.cuda.synchronize()
     time_pytorch = time() - t0
@@ -138,7 +154,11 @@ def inference_timing_test():
         t0 = time()
         torch.cuda.synchronize()
         for i in range(test_iters):
-            _ = hp.forward_pytorch(x)
+            try:
+                _ = hp.forward_pytorch(x)
+            except RuntimeError as e:
+                print("Memory error - PyTorch exceeded the maximum GPU memory. Continuing test regardless.")
+                break
         torch.cuda.synchronize()
         time_pytorch = time() - t0
 
@@ -159,8 +179,11 @@ def forward_error_test():
     print(f"======================================================")
     print(f"====================Forward test======================")
     print(f"======================================================")
-
-    out_pytorch = hp.forward_pytorch(x)
+    try:
+        out_pytorch = hp.forward_pytorch(x)
+    except RuntimeError as e:
+        print("Memory error - PyTorch exceeded the maximum GPU memory. Stopping test.")
+        return
     out_cuda = hp.forward(x)
     error = ((out_pytorch-out_cuda)**2).flatten()
     mse = error.mean()
@@ -174,8 +197,11 @@ def backward_error_test():
     print(f"======================================================")
     print(f"===================Backward test======================")
     print(f"======================================================")
-
-    out_pytorch = hp.forward_pytorch(x)
+    try:
+        out_pytorch = hp.forward_pytorch(x)
+    except RuntimeError as e:
+        print("Memory error - PyTorch exceeded the maximum GPU memory. Ending test.")
+        return
     out_cuda = hp.forward(x)
 
     (out_pytorch.abs()).mean().backward()

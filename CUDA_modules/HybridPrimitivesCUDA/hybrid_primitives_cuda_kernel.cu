@@ -157,17 +157,17 @@ namespace{
         const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_coefficients,
         torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> output) {
 
-        const float TWO_PI = 2.0f*3.1415926f;
-
         // Get block/thread related numbers   
         const int index = blockIdx.x * blockDim.x + threadIdx.x;
         const int stride = blockDim.x * gridDim.x;
 
+        __syncthreads();
         int max_iters = input.size(0);
         for(int i = index; i < max_iters; i+= stride){
             const auto x = input[i];
+            //float3 result = {0.0f, 0.0f, 0.0f};
             // Loop over gaussians
-            for(int j = 0; j < gaussian_colors.size(0); i++){
+            for(int j = 0; j < gaussian_colors.size(0); j++){
                 const float g_x = (x[0] - gaussian_means[j][0]) * gaussian_mats[j][0][0] +
                         (x[1] - gaussian_means[j][1]) * gaussian_mats[j][1][0];
                 const float g_y = (x[0] - gaussian_means[j][0]) * gaussian_mats[j][0][1] + 
@@ -179,20 +179,21 @@ namespace{
             // Loop over waves
             for(int j = 0; j < wave_colors.size(0); j++){
                 const float g_x = (x[0] - wave_means[j][0]) * wave_mats[j][0][0] +
-                            (x[1] - wave_means[jobs][1]) * wave_mats[j][1][0];
+                            (x[1] - wave_means[j][1]) * wave_mats[j][1][0];
                 const float g_y = (x[0] - wave_means[j][0]) * wave_mats[j][0][1] + 
                         (x[1] - wave_means[j][1]) * wave_mats[j][1][1];
-                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
-                const float sx = sinf(TWO_PI*x[0]*wave_frequencies[j][0]);
-                const float sy = sinf(TWO_PI*x[1]*wave_frequencies[j][1]);
-                const float cx = cosf(TWO_PI*x[0]*wave_frequencies[j][0]);
-                const float cy = cosf(TWO_PI*x[1]*wave_frequencies[j][1]);
+                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);                     
+                if(g<0.0000001f) continue; 
+                const float sx = sinpif(2.0f*x[0]*wave_frequencies[j][0]);
+                const float sy = sinpif(2.0f*x[1]*wave_frequencies[j][1]);
+                const float cx = cospif(2.0f*x[0]*wave_frequencies[j][0]);
+                const float cy = cospif(2.0f*x[1]*wave_frequencies[j][1]);
                 const float w = wave_coefficients[j][0]*cx*cy +
                     wave_coefficients[j][1]*cx*sy +
                     wave_coefficients[j][2]*sx*cy +
                     wave_coefficients[j][3]*sx*sy +
-                    wave_coefficients[j][4];                               
-                if(g<0.0000001f) continue; 
+                    wave_coefficients[j][4];         
+                if(abs(w)<0.0000001f) continue;  
                 for (int k = 0; k < output.size(1); k++){ output[i][k] += g*w*wave_colors[j][k]; }
             }
         }
@@ -515,19 +516,14 @@ namespace{
         torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_coefficients
         ) {
             
-        const float TWO_PI = 2.0f*3.1415926f;
-
         // Get block/thread related numbers   
         const int index = blockIdx.x * blockDim.x + threadIdx.x;
         const int stride = blockDim.x * gridDim.x;
 
         int max_iters = input.size(0);
         for(int i = index; i < max_iters; i+= stride){
-            // Check if we're out of bounds and return if so
-            if(output_idx>input.size(0)) continue;
-
-            const auto x = input[output_idx];
-            const auto y = grad_output[output_idx];
+            const auto x = input[i];
+            const auto y = grad_output[i];
 
             for(int j = 0; j < gaussian_colors.size(0); j++){
                 const float g_x = (x[0] - gaussian_means[j][0]) * gaussian_mats[j][0][0] +
@@ -564,13 +560,12 @@ namespace{
                             (x[1] - wave_means[j][1]) * wave_mats[j][1][0];
                 const float g_y = (x[0] - wave_means[j][0]) * wave_mats[j][0][1] + 
                         (x[1] - wave_means[j][1]) * wave_mats[j][1][1];
-                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
-                                              
+                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);  
                 if(g<0.0000001f) continue; 
-                const float sx = sinf(TWO_PI*x[0]*wave_frequencies[jobs][0]);
-                const float sy = sinf(TWO_PI*x[1]*wave_frequencies[j][1]);
-                const float cx = cosf(TWO_PI*x[0]*wave_frequencies[j][0]);
-                const float cy = cosf(TWO_PI*x[1]*wave_frequencies[j][1]);
+                const float sx = sinpif(2.0f*x[0]*wave_frequencies[j][0]);
+                const float sy = sinpif(2.0f*x[1]*wave_frequencies[j][1]);
+                const float cx = cospif(2.0f*x[0]*wave_frequencies[j][0]);
+                const float cy = cospif(2.0f*x[1]*wave_frequencies[j][1]);
                 const float w = wave_coefficients[j][0]*cx*cy +
                     wave_coefficients[j][1]*cx*sy +
                     wave_coefficients[j][2]*sx*cy +
@@ -722,7 +717,7 @@ std::vector<torch::Tensor> hybrid_model_backward_cuda(
             wave_coefficients.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
             grad_gaussian_colors.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
             grad_gaussian_means.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
-            grad_gaussian_mats.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>()
+            grad_gaussian_mats.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
             grad_wave_colors.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
             grad_wave_means.packed_accessor<scalar_t,2,torch::RestrictPtrTraits,size_t>(),
             grad_wave_mats.packed_accessor<scalar_t,3,torch::RestrictPtrTraits,size_t>(),
