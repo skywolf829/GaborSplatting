@@ -93,12 +93,12 @@ class HybridPrimitives(torch.nn.Module):
         return total
     
     def add_random_gaussians(self, num_gaussians):
-        new_colors = 0.2*(torch.randn([num_gaussians, self.n_channels], 
+        new_colors = 0.1*(torch.randn([num_gaussians, self.n_channels], 
                 dtype=torch.float32, device=self.device))
         new_means = torch.rand([num_gaussians, self.num_dimensions], 
                 dtype=torch.float32, device=self.device)
         new_mats = torch.eye(self.num_dimensions, device=self.device, 
-                dtype=torch.float32)[None,...].repeat(num_gaussians, 1, 1) * 50
+                dtype=torch.float32)[None,...].repeat(num_gaussians, 1, 1) * 100
         new_mats += torch.randn_like(new_mats)*0.1
 
         tensor_dict = {
@@ -119,7 +119,7 @@ class HybridPrimitives(torch.nn.Module):
         new_means = torch.rand([num_waves, self.num_dimensions], 
                 dtype=torch.float32, device=self.device)
         new_mats = torch.eye(self.num_dimensions, device=self.device, 
-                dtype=torch.float32)[None,...].repeat(num_waves, 1, 1) * 50
+                dtype=torch.float32)[None,...].repeat(num_waves, 1, 1) * 75
         new_mats += torch.randn_like(new_mats)*0.1
         new_frequencies = torch.rand([num_waves, self.num_dimensions],
                 dtype=torch.float32, device=self.device)
@@ -157,7 +157,7 @@ class HybridPrimitives(torch.nn.Module):
         if(num_waves > 0):
             ls_model = LombScargle2D(x, y, n_terms=1, device=self.device)
             # Randomize set of wavelengths and freqs to fit in correct range
-            freqs = 0.1+torch.sort(freq_decay*64*torch.rand([n_freqs], device=self.device, dtype=torch.float32)).values
+            freqs = 0.1+torch.sort(freq_decay*48*torch.rand([n_freqs], device=self.device, dtype=torch.float32)).values
             
             # Fit model and find peaks
             ls_model.fit(freqs)            

@@ -23,10 +23,10 @@ from datetime import datetime
 
 if __name__ == '__main__':
     
-    total_iters = 30000
-    fine_tune_iters = 5000    
-    total_primitives = 300
-    primitives_per_update = 5
+    total_iters = 2000
+    fine_tune_iters = 1000    
+    total_primitives = 100000
+    primitives_per_update = 50000
     iters_per_primitive = int((total_iters-fine_tune_iters) / (total_primitives/primitives_per_update))
     
     model_type = HybridPrimitives
@@ -87,9 +87,9 @@ if __name__ == '__main__':
         mask = torch.rand(x.shape[0], device=x.device, dtype=torch.float32) < pct_of_data
 
         # image logging
-        if i % 500 == 0 and i > 0:
+        if i % 1000 == 0 and i > 0:
             with torch.no_grad():
-                res = [200, 200]
+                res = [512, 512]
                 xmin = x.min(dim=0).values
                 xmax = x.max(dim=0).values
                 g = [torch.linspace(xmin[i], xmax[i], res[i], device=model.device) for i in range(xmin.shape[0])]
