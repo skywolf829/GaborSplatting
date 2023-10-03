@@ -5,9 +5,9 @@ import os
 from models.LombScargle2D import LombScargle2D
 
 hybrid_primitives = load(name='hybrid_primitives', 
-                    sources=[os.path.join("/".join(__file__.split('/')[0:-1]),"..", "CUDA_Modules", 
+                    sources=[os.path.join(os.sep.join(__file__.split(os.sep)[0:-1]),"..", "CUDA_Modules", 
                                           "HybridPrimitivesCUDA", 'hybrid_primitives_cuda.cpp'), 
-                             os.path.join("/".join(__file__.split('/')[0:-1]),"..", "CUDA_Modules", 
+                             os.path.join(os.sep.join(__file__.split(os.sep)[0:-1]),"..", "CUDA_Modules", 
                                           "HybridPrimitivesCUDA", 'hybrid_primitives_cuda_kernel.cu')])
 
 class HybridPrimitivesFunction(torch.autograd.Function):

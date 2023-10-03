@@ -115,11 +115,11 @@ if __name__ == '__main__':
                 if(i>0):
                     residuals -= model(x[mask])
                 model.prune_primitives(1./500.)
-                #n_gaussians = primitives_per_update
-                #n_waves = 0
+                n_gaussians = primitives_per_update
+                n_waves = 0
                 #n_gaussians = 0
-                n_waves = primitives_per_update
-                n_gaussians = primitives_per_update-n_waves
+                #n_waves = primitives_per_update
+                #n_gaussians = primitives_per_update-n_waves
                 n_extracted_peaks = model.add_primitives(
                                     x[mask],
                                     residuals,
@@ -148,10 +148,10 @@ if __name__ == '__main__':
         # actual training step
         model.optimizer.zero_grad()
         losses, model_out = model.loss(x[mask], y[mask])
-        if (losses['final_loss'].isnan()):
-            print()
-            print(f"Detected loss was NaN.")
-            quit()
+        #if (losses['final_loss'].isnan()):
+        #    print()
+        #    print(f"Detected loss was NaN.")
+        #    quit()
             
         losses['final_loss'].backward()
         #print(f"{self.subgaussian_width} {self.subgaussian_width.grad}")

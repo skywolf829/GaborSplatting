@@ -5,145 +5,7 @@
 
 namespace{
 
-    template <typename scalar_t>
-    __global__ void gaussian_forward_cuda_kernel(        
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> input,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> gaussian_colors,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> gaussian_means,
-        const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> gaussian_mats,
-        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> output) {
-
-        // Get block/thread related numbers   
-        const long index = blockIdx.x * blockDim.x + threadIdx.x;
-        const long stride = blockDim.x * gridDim.x;
-        const long num_primitives = gaussian_colors.size(0);
-
-        long max_iters = input.size(0)*num_primitives;
-        for(long i = index; i < max_iters; i+= stride){
-            const long output_idx = i / num_primitives;
-            const long primitive_index = i % num_primitives;
-
-            // Check if we're out of bounds and return if so
-            if(output_idx>output.size(0)) continue;
-
-            const auto x = input[output_idx];
-            const float g_x = (x[0] - gaussian_means[primitive_index][0]) * gaussian_mats[primitive_index][0][0] +
-                    (x[1] - gaussian_means[primitive_index][1]) * gaussian_mats[primitive_index][1][0];
-            const float g_y = (x[0] - gaussian_means[primitive_index][0]) * gaussian_mats[primitive_index][0][1] + 
-                    (x[1] - gaussian_means[primitive_index][1]) * gaussian_mats[primitive_index][1][1];
-            const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
-            if(g<0.0000001f) continue; 
-            for (int k = 0; k < output.size(1); k++){ atomicAdd(&output[output_idx][k], g*gaussian_colors[primitive_index][k]); }
-        }
-    }
-
-    template <typename scalar_t>
-    __global__ void wave_forward_cuda_kernel(        
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> input,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_colors,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_means,
-        const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> wave_mats,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_frequencies,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_coefficients,
-        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> output) {
-
-        const float TWO_PI = 2.0f*3.1415926f;
-
-        // Get block/thread related numbers   
-        const long index = blockIdx.x * blockDim.x + threadIdx.x;
-        const long stride = blockDim.x * gridDim.x;
-        const long num_primitives = wave_colors.size(0);
-
-        long max_iters = input.size(0)*num_primitives;
-        for(long i = index; i < max_iters; i+= stride){
-            const long output_idx = i / num_primitives;
-            const long primitive_index = i % num_primitives;
-
-            // Check if we're out of bounds and return if so
-            if(output_idx > output.size(0)) continue;
-
-            const auto x = input[output_idx];
-            
-            const float g_x = (x[0] - wave_means[primitive_index][0]) * wave_mats[primitive_index][0][0] +
-                        (x[1] - wave_means[primitive_index][1]) * wave_mats[primitive_index][1][0];
-            const float g_y = (x[0] - wave_means[primitive_index][0]) * wave_mats[primitive_index][0][1] + 
-                    (x[1] - wave_means[primitive_index][1]) * wave_mats[primitive_index][1][1];
-            const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
-            const float sx = sinf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
-            const float sy = sinf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
-            const float cx = cosf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
-            const float cy = cosf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
-            const float w = wave_coefficients[primitive_index][0]*cx*cy +
-                wave_coefficients[primitive_index][1]*cx*sy +
-                wave_coefficients[primitive_index][2]*sx*cy +
-                wave_coefficients[primitive_index][3]*sx*sy +
-                wave_coefficients[primitive_index][4];                               
-            if(g<0.0000001f) continue; 
-            for (int k = 0; k < output.size(1); k++){ atomicAdd(&output[output_idx][k], g*w*wave_colors[primitive_index][k]); }
-        }
-    }
-
-    template <typename scalar_t>
-    __global__ void hybrid_model_forward_cuda_kernel(        
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> input,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> gaussian_colors,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> gaussian_means,
-        const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> gaussian_mats,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_colors,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_means,
-        const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> wave_mats,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_frequencies,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_coefficients,
-        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> output) {
-
-        const float TWO_PI = 2.0f*3.1415926f;
-
-        // Get block/thread related numbers   
-        const long index = blockIdx.x * blockDim.x + threadIdx.x;
-        const long stride = blockDim.x * gridDim.x;
-        const long num_primitives = gaussian_colors.size(0) + wave_colors.size(0);
-
-        long max_iters = input.size(0)*num_primitives;
-        for(long i = index; i < max_iters; i+= stride){
-            const long output_idx = i / num_primitives;
-            long primitive_index = i % num_primitives;
-
-            // Check if we're out of bounds and return if so
-            if(output_idx>output.size(0)) continue;
-
-            const auto x = input[output_idx];
-
-            if(primitive_index < gaussian_colors.size(0)){
-                const float g_x = (x[0] - gaussian_means[primitive_index][0]) * gaussian_mats[primitive_index][0][0] +
-                        (x[1] - gaussian_means[primitive_index][1]) * gaussian_mats[primitive_index][1][0];
-                const float g_y = (x[0] - gaussian_means[primitive_index][0]) * gaussian_mats[primitive_index][0][1] + 
-                        (x[1] - gaussian_means[primitive_index][1]) * gaussian_mats[primitive_index][1][1];
-                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
-                if(g<0.0000001f) continue; 
-                for (int k = 0; k < output.size(1); k++){ atomicAdd(&output[output_idx][k], g*gaussian_colors[primitive_index][k]); }
-            }
-            else{
-                primitive_index -= gaussian_colors.size(0);
-                const float g_x = (x[0] - wave_means[primitive_index][0]) * wave_mats[primitive_index][0][0] +
-                            (x[1] - wave_means[primitive_index][1]) * wave_mats[primitive_index][1][0];
-                const float g_y = (x[0] - wave_means[primitive_index][0]) * wave_mats[primitive_index][0][1] + 
-                        (x[1] - wave_means[primitive_index][1]) * wave_mats[primitive_index][1][1];
-                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
-                const float sx = sinf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
-                const float sy = sinf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
-                const float cx = cosf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
-                const float cy = cosf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
-                const float w = wave_coefficients[primitive_index][0]*cx*cy +
-                    wave_coefficients[primitive_index][1]*cx*sy +
-                    wave_coefficients[primitive_index][2]*sx*cy +
-                    wave_coefficients[primitive_index][3]*sx*sy +
-                    wave_coefficients[primitive_index][4];                               
-                if(g<0.0000001f) continue; 
-                for (int k = 0; k < output.size(1); k++){ atomicAdd(&output[output_idx][k], g*w*wave_colors[primitive_index][k]); }
-            }
-        }
-    }
-
+    
     template <typename scalar_t>
     __global__ void pointwise_forward_cuda_kernel(        
         const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> input,
@@ -161,340 +23,133 @@ namespace{
         const int index = blockIdx.x * blockDim.x + threadIdx.x;
         const int stride = blockDim.x * gridDim.x;
 
-        __syncthreads();
-        int max_iters = input.size(0);
-        for(int i = index; i < max_iters; i+= stride){
-            const auto x = input[i];
-            //float3 result = {0.0f, 0.0f, 0.0f};
+        // Params
+        const int num_channels = output.size(1);
+        const int num_gaussians = gaussian_colors.size(0);
+        const int num_waves = wave_colors.size(0);
+        const int batch_size = input.size(0);
+        
+        // Temp values
+        float temp_result[3];
+        int i, j, idx;
+            
+        // Declare shared floats for later
+        __shared__ float R[512], G[512], B[512];
+        __shared__ float mx[512], my[512];
+        __shared__ float cov00[512], cov01[512], cov10[512], cov11[512];
+        __shared__ float w_coeff1[512], w_coeff2[512], w_coeff3[512], w_coeff4[512], w_coeff5[512];
+        __shared__ float w_freqx[512], w_freqy[512];
+
+        // (x,y) input coordinate
+        float x, y;
+
+        // Iterate over the query points this thread is responsible for
+        for(i = index; i < 512*(1+batch_size/512); i += stride){
+
+            // Only get data if we are in bounds
+            if(i < batch_size){
+                temp_result[0] = 0.0f;
+                temp_result[1] = 0.0f;
+                temp_result[2] = 0.0f;
+                x = input[i][0];
+                y = input[i][1];
+            }
+
             // Loop over gaussians
-            for(int j = 0; j < gaussian_colors.size(0); j++){
-                const float g_x = (x[0] - gaussian_means[j][0]) * gaussian_mats[j][0][0] +
-                        (x[1] - gaussian_means[j][1]) * gaussian_mats[j][1][0];
-                const float g_y = (x[0] - gaussian_means[j][0]) * gaussian_mats[j][0][1] + 
-                        (x[1] - gaussian_means[j][1]) * gaussian_mats[j][1][1];
-                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
-                if(g<0.0000001f) continue; 
-                for (int k = 0; k < output.size(1); k++){ output[i][k] += g*gaussian_colors[j][k]; }
+            for(j = 0; j < num_gaussians; j++){  
+                // Load shared memory every block_size (512 threads)
+                if(j % 512 == 0){
+                    __syncthreads();  
+                    // Need to do this IF check inside because the 
+                    // threads need to be synced even if they are out of bounds.
+                    if(j + threadIdx.x < num_gaussians){
+                        mx[threadIdx.x] = gaussian_means[j + threadIdx.x][0];
+                        my[threadIdx.x] = gaussian_means[j + threadIdx.x][1];
+                        cov00[threadIdx.x] = gaussian_mats[j + threadIdx.x][0][0];
+                        cov01[threadIdx.x] = gaussian_mats[j + threadIdx.x][0][1];
+                        cov10[threadIdx.x] = gaussian_mats[j + threadIdx.x][1][0];
+                        cov11[threadIdx.x] = gaussian_mats[j + threadIdx.x][1][1];
+                        R[threadIdx.x] = gaussian_colors[j + threadIdx.x][0];
+                        G[threadIdx.x] = gaussian_colors[j + threadIdx.x][1];
+                        B[threadIdx.x] = gaussian_colors[j + threadIdx.x][2];
+                    }
+                    __syncthreads();
+                }
+                if(i < batch_size){
+                    idx = j % 512;
+
+                    const float g_x = (x - mx[idx]) * cov00[idx] +
+                            (y - my[idx]) * cov10[idx];
+                    const float g_y = (x - mx[idx]) * cov01[idx] + 
+                            (y - my[idx]) * cov11[idx];
+                    const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
+                    if(g<0.0000001f) continue; 
+                    temp_result[0] += g*R[idx];
+                    temp_result[1] += g*G[idx];
+                    temp_result[2] += g*B[idx];
+                }
             }
+
             // Loop over waves
-            for(int j = 0; j < wave_colors.size(0); j++){
-                const float g_x = (x[0] - wave_means[j][0]) * wave_mats[j][0][0] +
-                            (x[1] - wave_means[j][1]) * wave_mats[j][1][0];
-                const float g_y = (x[0] - wave_means[j][0]) * wave_mats[j][0][1] + 
-                        (x[1] - wave_means[j][1]) * wave_mats[j][1][1];
-                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);                     
-                if(g<0.0000001f) continue; 
-                const float sx = sinpif(2.0f*x[0]*wave_frequencies[j][0]);
-                const float sy = sinpif(2.0f*x[1]*wave_frequencies[j][1]);
-                const float cx = cospif(2.0f*x[0]*wave_frequencies[j][0]);
-                const float cy = cospif(2.0f*x[1]*wave_frequencies[j][1]);
-                const float w = wave_coefficients[j][0]*cx*cy +
-                    wave_coefficients[j][1]*cx*sy +
-                    wave_coefficients[j][2]*sx*cy +
-                    wave_coefficients[j][3]*sx*sy +
-                    wave_coefficients[j][4];         
-                if(abs(w)<0.0000001f) continue;  
-                for (int k = 0; k < output.size(1); k++){ output[i][k] += g*w*wave_colors[j][k]; }
+            for(j = 0; j < num_waves; j++){
+                if(j % 512 == 0){
+                    __syncthreads();  
+                    // Need to do this IF check inside because the 
+                    // threads need to be synced even if they are out of bounds.
+                    if(j + threadIdx.x < num_gaussians){
+                        mx[threadIdx.x] = wave_means[j + threadIdx.x][0];
+                        my[threadIdx.x] = wave_means[j + threadIdx.x][1];
+                        cov00[threadIdx.x] = wave_mats[j + threadIdx.x][0][0];
+                        cov01[threadIdx.x] = wave_mats[j + threadIdx.x][0][1];
+                        cov10[threadIdx.x] = wave_mats[j + threadIdx.x][1][0];
+                        cov11[threadIdx.x] = wave_mats[j + threadIdx.x][1][1];
+                        R[threadIdx.x] = wave_colors[j + threadIdx.x][0];
+                        G[threadIdx.x] = wave_colors[j + threadIdx.x][1];
+                        B[threadIdx.x] = wave_colors[j + threadIdx.x][2];      
+                        w_coeff1[threadIdx.x] = wave_coefficients[j + threadIdx.x][0];
+                        w_coeff2[threadIdx.x] = wave_coefficients[j + threadIdx.x][1];
+                        w_coeff3[threadIdx.x] = wave_coefficients[j + threadIdx.x][2];
+                        w_coeff4[threadIdx.x] = wave_coefficients[j + threadIdx.x][3];
+                        w_coeff5[threadIdx.x] = wave_coefficients[j + threadIdx.x][4];
+                        w_freqx[threadIdx.x] = wave_frequencies[j + threadIdx.x][0];
+                        w_freqy[threadIdx.x] = wave_frequencies[j + threadIdx.x][1];
+                    }
+                    __syncthreads();
+                }
+                if(i < batch_size){
+                    idx = j % 512;
+                    const float g_x = (x - mx[idx]) * cov00[idx] +
+                                        (y - my[idx]) * cov10[idx];
+                    const float g_y = (x - mx[idx]) * cov01[idx] + 
+                                        (y - my[idx]) * cov11[idx];
+                    const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);                     
+                    if(g<0.0000001f) continue; 
+                    const float sx = sinpif(2.0f*x*w_freqx[idx]);
+                    const float sy = sinpif(2.0f*y*w_freqy[idx]);
+                    const float cx = cospif(2.0f*x*w_freqx[idx]);
+                    const float cy = cospif(2.0f*y*w_freqy[idx]);
+                    const float w = w_coeff1[idx]*cx*cy +
+                                    w_coeff2[idx]*cx*sy +
+                                    w_coeff3[idx]*sx*cy +
+                                    w_coeff4[idx]*sx*sy +
+                                    w_coeff5[idx];         
+                    if(abs(w)<0.0000001f) continue;  
+                    temp_result[0] += g*w*R[idx]; 
+                    temp_result[1] += g*w*G[idx]; 
+                    temp_result[2] += g*w*B[idx]; 
+                }
+            }
+            
+            if(i < batch_size){
+                output[i][0] = temp_result[0]; 
+                output[i][1] = temp_result[1]; 
+                output[i][2] = temp_result[2];
             }
         }
     }
 
     
     template <typename scalar_t>
-    __global__ void gaussian_backward_cuda_kernel(
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_output,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> input,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> gaussian_colors,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> gaussian_means,
-        const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> gaussian_mats,
-        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_gaussian_colors,
-        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_gaussian_means,
-        torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> grad_gaussian_mats
-        ) {
-            
-        // Get block/thread related numbers   
-        const long index = blockIdx.x * blockDim.x + threadIdx.x;
-        const long stride = blockDim.x * gridDim.x;
-        const long num_primitives = gaussian_colors.size(0);
-
-        long max_iters = input.size(0)*num_primitives;
-        for(long i = index; i < max_iters; i+= stride){
-            const long output_idx = i / num_primitives;
-            const long primitive_index = i % num_primitives;
-
-            // Check if we're out of bounds and return if so
-            if(output_idx>input.size(0)) continue;
-
-            const auto x = input[output_idx];
-            const auto y = grad_output[output_idx];
-
-            const float g_x = (x[0] - gaussian_means[primitive_index][0]) * gaussian_mats[primitive_index][0][0] +
-                    (x[1] - gaussian_means[primitive_index][1]) * gaussian_mats[primitive_index][1][0];
-            const float g_y = (x[0] - gaussian_means[primitive_index][0]) * gaussian_mats[primitive_index][0][1] + 
-                    (x[1] - gaussian_means[primitive_index][1]) * gaussian_mats[primitive_index][1][1];
-            const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
-            if(g<0.0000001f) continue; 
-            for (int k = 0; k < grad_output.size(1); k++){ 
-                // Gaussian color gradient update
-                atomicAdd(&grad_gaussian_colors[primitive_index][k], y[k]*g); 
-
-                // Gaussian position gradient update
-                atomicAdd(&grad_gaussian_means[primitive_index][0], 
-                    y[k]*g*gaussian_colors[primitive_index][k]*
-                    (g_x*gaussian_mats[primitive_index][0][0]+g_y*gaussian_mats[primitive_index][0][1]));
-                atomicAdd(&grad_gaussian_means[primitive_index][1], 
-                    y[k]*g*gaussian_colors[primitive_index][k]*
-                    (g_x*gaussian_mats[primitive_index][1][0]+g_y*gaussian_mats[primitive_index][1][1]));
-                    
-                // Gaussian covariance matrix update
-                atomicAdd(&grad_gaussian_mats[primitive_index][0][0], 
-                    y[k]*g*gaussian_colors[primitive_index][k]*g_x*-(x[0] - gaussian_means[primitive_index][0]));
-                atomicAdd(&grad_gaussian_mats[primitive_index][0][1], 
-                    y[k]*g*gaussian_colors[primitive_index][k]*g_y*-(x[0] - gaussian_means[primitive_index][0]));
-                atomicAdd(&grad_gaussian_mats[primitive_index][1][0], 
-                    y[k]*g*gaussian_colors[primitive_index][k]*g_x*-(x[1] - gaussian_means[primitive_index][1]));
-                atomicAdd(&grad_gaussian_mats[primitive_index][1][1], 
-                    y[k]*g*gaussian_colors[primitive_index][k]*g_y*-(x[1] - gaussian_means[primitive_index][1]));
-            }      
-        }
-    }
-    
-
-    template <typename scalar_t>
-    __global__ void wave_backward_cuda_kernel(
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_output,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> input,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_colors,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_means,
-        const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> wave_mats,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_frequencies,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_coefficients,
-        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_colors,
-        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_means,
-        torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> grad_wave_mats,
-        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_frequencies,
-        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_coefficients
-        ) {
-            
-        const float TWO_PI = 2.0f*3.1415926f;
-
-        // Get block/thread related numbers   
-        const long index = blockIdx.x * blockDim.x + threadIdx.x;
-        const long stride = blockDim.x * gridDim.x;
-        const long num_primitives = wave_colors.size(0);
-
-        long max_iters = input.size(0)*num_primitives;
-        for(long i = index; i < max_iters; i+= stride){
-            const long output_idx = i / num_primitives;
-            const long primitive_index = i % num_primitives;
-
-            // Check if we're out of bounds and return if so
-            if(output_idx>input.size(0)) continue;
-
-            const auto x = input[output_idx];
-            const auto y = grad_output[output_idx];
-
-            const float g_x = (x[0] - wave_means[primitive_index][0]) * wave_mats[primitive_index][0][0] +
-                        (x[1] - wave_means[primitive_index][1]) * wave_mats[primitive_index][1][0];
-            const float g_y = (x[0] - wave_means[primitive_index][0]) * wave_mats[primitive_index][0][1] + 
-                    (x[1] - wave_means[primitive_index][1]) * wave_mats[primitive_index][1][1];
-            const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
-            // Save time by not computing if unnecessary
-            if(g<0.0000001f) continue;                
-            const float sx = sinf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
-            const float sy = sinf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
-            const float cx = cosf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
-            const float cy = cosf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
-            const float w = wave_coefficients[primitive_index][0]*cx*cy +
-                wave_coefficients[primitive_index][1]*cx*sy +
-                wave_coefficients[primitive_index][2]*sx*cy +
-                wave_coefficients[primitive_index][3]*sx*sy +
-                wave_coefficients[primitive_index][4]; 
-            for (int k = 0; k < grad_output.size(1); k++){ 
-                // Wave color gradient update
-                atomicAdd(&grad_wave_colors[primitive_index][k], y[k]*g*w); 
-                
-                // Wave position gradient update
-                atomicAdd(&grad_wave_means[primitive_index][0], 
-                    y[k]*w*g*wave_colors[primitive_index][k]*
-                    (g_x*wave_mats[primitive_index][0][0]+g_y*wave_mats[primitive_index][0][1]));
-                atomicAdd(&grad_wave_means[primitive_index][1], 
-                    y[k]*w*g*wave_colors[primitive_index][k]*
-                    (g_x*wave_mats[primitive_index][1][0]+g_y*wave_mats[primitive_index][1][1]));
-                    
-                // Wave covariance matrix gradient update
-                atomicAdd(&grad_wave_mats[primitive_index][0][0], 
-                    y[k]*w*g*wave_colors[primitive_index][k]*g_x*-(x[0] - wave_means[primitive_index][0]));
-                atomicAdd(&grad_wave_mats[primitive_index][0][1], 
-                    y[k]*w*g*wave_colors[primitive_index][k]*g_y*-(x[0] - wave_means[primitive_index][0]));
-                atomicAdd(&grad_wave_mats[primitive_index][1][0], 
-                    y[k]*w*g*wave_colors[primitive_index][k]*g_x*-(x[1] - wave_means[primitive_index][1]));
-                atomicAdd(&grad_wave_mats[primitive_index][1][1], 
-                    y[k]*w*g*wave_colors[primitive_index][k]*g_y*-(x[1] - wave_means[primitive_index][1]));
-
-                // Wave coefficients gradient update
-                atomicAdd(&grad_wave_coefficients[primitive_index][0], y[k]*g*cx*cy*wave_colors[primitive_index][k]);
-                atomicAdd(&grad_wave_coefficients[primitive_index][1], y[k]*g*cx*sy*wave_colors[primitive_index][k]);
-                atomicAdd(&grad_wave_coefficients[primitive_index][2], y[k]*g*sx*cy*wave_colors[primitive_index][k]);
-                atomicAdd(&grad_wave_coefficients[primitive_index][3], y[k]*g*sx*sy*wave_colors[primitive_index][k]);
-                atomicAdd(&grad_wave_coefficients[primitive_index][4], y[k]*g*wave_colors[primitive_index][k]);
-
-                // Wave frequency gradient update
-                atomicAdd(&grad_wave_frequencies[primitive_index][0], 
-                    y[k]*g*TWO_PI*x[0]*wave_colors[primitive_index][k]*(
-                        wave_coefficients[primitive_index][0]*cy*-sx +
-                        wave_coefficients[primitive_index][1]*sy*-sx +
-                        wave_coefficients[primitive_index][2]*cy*cx +
-                        wave_coefficients[primitive_index][3]*sy*cx
-                    ));
-                atomicAdd(&grad_wave_frequencies[primitive_index][1], 
-                    y[k]*g*TWO_PI*x[1]*wave_colors[primitive_index][k]*(
-                        wave_coefficients[primitive_index][0]*cx*-sy +
-                        wave_coefficients[primitive_index][1]*cx*cy +
-                        wave_coefficients[primitive_index][2]*sx*-sy +
-                        wave_coefficients[primitive_index][3]*sx*cy
-                    ));
-            }
-        }
-    } 
-
-    template <typename scalar_t>
-    __global__ void hybrid_model_backward_cuda_kernel(
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_output,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> input,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> gaussian_colors,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> gaussian_means,
-        const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> gaussian_mats,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_colors,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_means,
-        const torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> wave_mats,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_frequencies,
-        const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> wave_coefficients,
-        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_gaussian_colors,
-        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_gaussian_means,
-        torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> grad_gaussian_mats,
-        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_colors,
-        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_means,
-        torch::PackedTensorAccessor<scalar_t,3,torch::RestrictPtrTraits,size_t> grad_wave_mats,
-        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_frequencies,
-        torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_wave_coefficients
-        ) {
-            
-        const float TWO_PI = 2.0f*3.1415926f;
-
-        // Get block/thread related numbers   
-        const long index = blockIdx.x * blockDim.x + threadIdx.x;
-        const long stride = blockDim.x * gridDim.x;
-        const long num_primitives = gaussian_colors.size(0) + wave_colors.size(0);
-
-        long max_iters = input.size(0)*num_primitives;
-        for(long i = index; i < max_iters; i+= stride){
-            const long output_idx = i / num_primitives;
-            long primitive_index = i % num_primitives;
-
-            // Check if we're out of bounds and return if so
-            if(output_idx>input.size(0)) continue;
-
-            const auto x = input[output_idx];
-            const auto y = grad_output[output_idx];
-
-            if(primitive_index < gaussian_colors.size(0)){
-                const float g_x = (x[0] - gaussian_means[primitive_index][0]) * gaussian_mats[primitive_index][0][0] +
-                        (x[1] - gaussian_means[primitive_index][1]) * gaussian_mats[primitive_index][1][0];
-                const float g_y = (x[0] - gaussian_means[primitive_index][0]) * gaussian_mats[primitive_index][0][1] + 
-                        (x[1] - gaussian_means[primitive_index][1]) * gaussian_mats[primitive_index][1][1];
-                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
-                if(g<0.0000001f) continue; 
-                for (int k = 0; k < grad_output.size(1); k++){ 
-                    // Gaussian color gradient update
-                    atomicAdd(&grad_gaussian_colors[primitive_index][k], y[k]*g); 
-
-                    // Gaussian position gradient update
-                    atomicAdd(&grad_gaussian_means[primitive_index][0], 
-                        y[k]*g*gaussian_colors[primitive_index][k]*
-                        (g_x*gaussian_mats[primitive_index][0][0]+g_y*gaussian_mats[primitive_index][0][1]));
-                    atomicAdd(&grad_gaussian_means[primitive_index][1], 
-                        y[k]*g*gaussian_colors[primitive_index][k]*
-                        (g_x*gaussian_mats[primitive_index][1][0]+g_y*gaussian_mats[primitive_index][1][1]));
-                        
-                    // Gaussian covariance matrix update
-                    atomicAdd(&grad_gaussian_mats[primitive_index][0][0], 
-                        y[k]*g*gaussian_colors[primitive_index][k]*g_x*-(x[0] - gaussian_means[primitive_index][0]));
-                    atomicAdd(&grad_gaussian_mats[primitive_index][0][1], 
-                        y[k]*g*gaussian_colors[primitive_index][k]*g_y*-(x[0] - gaussian_means[primitive_index][0]));
-                    atomicAdd(&grad_gaussian_mats[primitive_index][1][0], 
-                        y[k]*g*gaussian_colors[primitive_index][k]*g_x*-(x[1] - gaussian_means[primitive_index][1]));
-                    atomicAdd(&grad_gaussian_mats[primitive_index][1][1], 
-                        y[k]*g*gaussian_colors[primitive_index][k]*g_y*-(x[1] - gaussian_means[primitive_index][1]));
-                }
-            }
-            else{
-                primitive_index -= gaussian_colors.size(0);
-                const float g_x = (x[0] - wave_means[primitive_index][0]) * wave_mats[primitive_index][0][0] +
-                            (x[1] - wave_means[primitive_index][1]) * wave_mats[primitive_index][1][0];
-                const float g_y = (x[0] - wave_means[primitive_index][0]) * wave_mats[primitive_index][0][1] + 
-                        (x[1] - wave_means[primitive_index][1]) * wave_mats[primitive_index][1][1];
-                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
-                                              
-                if(g<0.0000001f) continue; 
-                const float sx = sinf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
-                const float sy = sinf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
-                const float cx = cosf(TWO_PI*x[0]*wave_frequencies[primitive_index][0]);
-                const float cy = cosf(TWO_PI*x[1]*wave_frequencies[primitive_index][1]);
-                const float w = wave_coefficients[primitive_index][0]*cx*cy +
-                    wave_coefficients[primitive_index][1]*cx*sy +
-                    wave_coefficients[primitive_index][2]*sx*cy +
-                    wave_coefficients[primitive_index][3]*sx*sy +
-                    wave_coefficients[primitive_index][4]; 
-                for (int k = 0; k < grad_output.size(1); k++){ 
-                    // Wave color gradient update
-                    atomicAdd(&grad_wave_colors[primitive_index][k], y[k]*g*w); 
-                    
-                    // Wave position gradient update
-                    atomicAdd(&grad_wave_means[primitive_index][0], 
-                        y[k]*w*g*wave_colors[primitive_index][k]*
-                        (g_x*wave_mats[primitive_index][0][0]+g_y*wave_mats[primitive_index][0][1]));
-                    atomicAdd(&grad_wave_means[primitive_index][1], 
-                        y[k]*w*g*wave_colors[primitive_index][k]*
-                        (g_x*wave_mats[primitive_index][1][0]+g_y*wave_mats[primitive_index][1][1]));
-                        
-                    // Wave covariance matrix gradient update
-                    atomicAdd(&grad_wave_mats[primitive_index][0][0], 
-                        y[k]*w*g*wave_colors[primitive_index][k]*g_x*-(x[0] - wave_means[primitive_index][0]));
-                    atomicAdd(&grad_wave_mats[primitive_index][0][1], 
-                        y[k]*w*g*wave_colors[primitive_index][k]*g_y*-(x[0] - wave_means[primitive_index][0]));
-                    atomicAdd(&grad_wave_mats[primitive_index][1][0], 
-                        y[k]*w*g*wave_colors[primitive_index][k]*g_x*-(x[1] - wave_means[primitive_index][1]));
-                    atomicAdd(&grad_wave_mats[primitive_index][1][1], 
-                        y[k]*w*g*wave_colors[primitive_index][k]*g_y*-(x[1] - wave_means[primitive_index][1]));
-
-                    // Wave coefficients gradient update
-                    atomicAdd(&grad_wave_coefficients[primitive_index][0], y[k]*g*cx*cy*wave_colors[primitive_index][k]);
-                    atomicAdd(&grad_wave_coefficients[primitive_index][1], y[k]*g*cx*sy*wave_colors[primitive_index][k]);
-                    atomicAdd(&grad_wave_coefficients[primitive_index][2], y[k]*g*sx*cy*wave_colors[primitive_index][k]);
-                    atomicAdd(&grad_wave_coefficients[primitive_index][3], y[k]*g*sx*sy*wave_colors[primitive_index][k]);
-                    atomicAdd(&grad_wave_coefficients[primitive_index][4], y[k]*g*wave_colors[primitive_index][k]);
-
-                    // Wave frequency gradient update
-                    atomicAdd(&grad_wave_frequencies[primitive_index][0], 
-                        y[k]*g*TWO_PI*x[0]*wave_colors[primitive_index][k]*(
-                            wave_coefficients[primitive_index][0]*cy*-sx +
-                            wave_coefficients[primitive_index][1]*sy*-sx +
-                            wave_coefficients[primitive_index][2]*cy*cx +
-                            wave_coefficients[primitive_index][3]*sy*cx
-                        ));
-                    atomicAdd(&grad_wave_frequencies[primitive_index][1], 
-                        y[k]*g*TWO_PI*x[1]*wave_colors[primitive_index][k]*(
-                            wave_coefficients[primitive_index][0]*cx*-sy +
-                            wave_coefficients[primitive_index][1]*cx*cy +
-                            wave_coefficients[primitive_index][2]*sx*-sy +
-                            wave_coefficients[primitive_index][3]*sx*cy
-                        ));
-                }
-            }
-        }
-    } 
-     template <typename scalar_t>
     __global__ void pointwise_backward_cuda_kernel(
         const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> grad_output,
         const torch::PackedTensorAccessor<scalar_t,2,torch::RestrictPtrTraits,size_t> input,
@@ -520,101 +175,176 @@ namespace{
         const int index = blockIdx.x * blockDim.x + threadIdx.x;
         const int stride = blockDim.x * gridDim.x;
 
-        int max_iters = input.size(0);
-        for(int i = index; i < max_iters; i+= stride){
-            const auto x = input[i];
-            const auto y = grad_output[i];
+        // Params
+        const int num_channels = 3;
+        const int num_gaussians = gaussian_colors.size(0);
+        const int num_waves = wave_colors.size(0);
+        const int batch_size = input.size(0);
+        
+        // Temp values
+        int i, j, k, idx;
 
-            for(int j = 0; j < gaussian_colors.size(0); j++){
-                const float g_x = (x[0] - gaussian_means[j][0]) * gaussian_mats[j][0][0] +
-                        (x[1] - gaussian_means[j][1]) * gaussian_mats[j][1][0];
-                const float g_y = (x[0] - gaussian_means[j][0]) * gaussian_mats[j][0][1] + 
-                        (x[1] - gaussian_means[j][1]) * gaussian_mats[j][1][1];
-                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
-                if(g<0.0000001f) continue; 
-                for (int k = 0; k < grad_output.size(1); k++){ 
-                    // Gaussian color gradient update
-                    grad_gaussian_colors[j][k] += y[k]*g; 
+        // Declare shared floats for later
+        __shared__ float RGB[512*3];
+        __shared__ float mx[512], my[512];
+        __shared__ float cov00[512], cov01[512], cov10[512], cov11[512];
+        __shared__ float w_coeff1[512], w_coeff2[512], w_coeff3[512], w_coeff4[512], w_coeff5[512];
+        __shared__ float w_freqx[512], w_freqy[512];
 
-                    // Gaussian position gradient update
-                    grad_gaussian_means[j][0] += 
-                        y[k]*g*gaussian_colors[j][k]*
-                        (g_x*gaussian_mats[j][0][0]+g_y*gaussian_mats[j][0][1]);
-                    grad_gaussian_means[j][1] += 
-                        y[k]*g*gaussian_colors[j][k]*
-                        (g_x*gaussian_mats[j][1][0]+g_y*gaussian_mats[j][1][1]);
-                        
-                    // Gaussian covariance matrix update
-                    grad_gaussian_mats[j][0][0] +=
-                        y[k]*g*gaussian_colors[j][k]*g_x*-(x[0] - gaussian_means[j][0]);
-                    grad_gaussian_mats[j][0][1] +=
-                        y[k]*g*gaussian_colors[j][k]*g_y*-(x[0] - gaussian_means[j][0]);
-                    grad_gaussian_mats[j][1][0] +=
-                        y[k]*g*gaussian_colors[j][k]*g_x*-(x[1] - gaussian_means[j][1]);
-                    grad_gaussian_mats[j][1][1] +=
-                        y[k]*g*gaussian_colors[j][k]*g_y*-(x[1] - gaussian_means[j][1]);
+        // (x,y) input coordinate
+        float x, y;
+        float dRGB[3];
+
+        for(i = index; i < 512*(1+batch_size/512); i+= stride){
+            if(i < batch_size){
+                x = input[i][0];
+                y = input[i][1];
+                dRGB[0] = grad_output[i][0];
+                dRGB[1] = grad_output[i][1];
+                dRGB[2] = grad_output[i][2];
+            }
+
+            for(j = 0; j < num_gaussians; j++){
+                // Load shared memory every block_size (512 threads)
+                if(j % 512 == 0){
+                    __syncthreads();  
+                    // Need to do this IF check inside because the 
+                    // threads need to be synced even if they are out of bounds.
+                    if(j + threadIdx.x < num_gaussians){
+                        mx[threadIdx.x] = gaussian_means[j + threadIdx.x][0];
+                        my[threadIdx.x] = gaussian_means[j + threadIdx.x][1];
+                        cov00[threadIdx.x] = gaussian_mats[j + threadIdx.x][0][0];
+                        cov01[threadIdx.x] = gaussian_mats[j + threadIdx.x][0][1];
+                        cov10[threadIdx.x] = gaussian_mats[j + threadIdx.x][1][0];
+                        cov11[threadIdx.x] = gaussian_mats[j + threadIdx.x][1][1];
+                        RGB[3*threadIdx.x] = gaussian_colors[j + threadIdx.x][0];
+                        RGB[3*threadIdx.x+1] = gaussian_colors[j + threadIdx.x][1];
+                        RGB[3*threadIdx.x+2] = gaussian_colors[j + threadIdx.x][2];
+                    }
+                    __syncthreads();
+                }
+                if(i < batch_size){
+                    idx = j % 512;
+                    const float g_x = (x - mx[idx]) * cov00[idx] +
+                            (y - my[idx]) * cov10[idx];
+                    const float g_y = (x - mx[idx]) * cov01[idx] + 
+                            (y - my[idx]) * cov11[idx];
+                    const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
+                    if(g<0.0000001f) continue; 
+                    for (k = 0; k < num_channels; k++){ 
+                        if(abs(dRGB[k]) < 0.00000001f) continue;
+
+                        // Gaussian color gradient update
+                        grad_gaussian_colors[j][k] += dRGB[k]*g; 
+
+                        // Gaussian position gradient update
+                        grad_gaussian_means[j][0] += 
+                            dRGB[k]*g*RGB[idx*3+k]*
+                            (g_x*cov00[idx]+g_y*cov01[idx]);
+                        grad_gaussian_means[j][1] += 
+                            dRGB[k]*g*RGB[idx*3+k]*
+                            (g_x*cov10[idx]+g_y*cov11[idx]);
+                            
+                        // Gaussian covariance matrix update
+                        grad_gaussian_mats[j][0][0] +=
+                            dRGB[k]*g*RGB[idx*3+k]*g_x*-(x - mx[idx]);
+                        grad_gaussian_mats[j][0][1] +=
+                            dRGB[k]*g*RGB[idx*3+k]*g_y*-(x - mx[idx]);
+                        grad_gaussian_mats[j][1][0] +=
+                            dRGB[k]*g*RGB[idx*3+k]*g_x*-(y - my[idx]);
+                        grad_gaussian_mats[j][1][1] +=
+                            dRGB[k]*g*RGB[idx*3+k]*g_y*-(y - my[idx]);
+                    }
                 }
             }
-            for(int j = 0; j < wave_colors.size(0); j++){
-                const float g_x = (x[0] - wave_means[j][0]) * wave_mats[j][0][0] +
-                            (x[1] - wave_means[j][1]) * wave_mats[j][1][0];
-                const float g_y = (x[0] - wave_means[j][0]) * wave_mats[j][0][1] + 
-                        (x[1] - wave_means[j][1]) * wave_mats[j][1][1];
-                const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);  
-                if(g<0.0000001f) continue; 
-                const float sx = sinpif(2.0f*x[0]*wave_frequencies[j][0]);
-                const float sy = sinpif(2.0f*x[1]*wave_frequencies[j][1]);
-                const float cx = cospif(2.0f*x[0]*wave_frequencies[j][0]);
-                const float cy = cospif(2.0f*x[1]*wave_frequencies[j][1]);
-                const float w = wave_coefficients[j][0]*cx*cy +
-                    wave_coefficients[j][1]*cx*sy +
-                    wave_coefficients[j][2]*sx*cy +
-                    wave_coefficients[j][3]*sx*sy +
-                    wave_coefficients[j][4]; 
-                for (int k = 0; k < grad_output.size(1); k++){ 
-                    // Wave color gradient update
-                    grad_wave_colors[j][k] += y[k]*g*w; 
-                    
-                    // Wave position gradient update
-                    grad_wave_means[j][0] +=
-                        y[k]*w*g*wave_colors[j][k]*
-                        (g_x*wave_mats[j][0][0]+g_y*wave_mats[j][0][1]);
-                    grad_wave_means[j][1] +=
-                        y[k]*w*g*wave_colors[j][k]*
-                        (g_x*wave_mats[j][1][0]+g_y*wave_mats[j][1][1]);
+            for(j = 0; j < num_waves; j++){
+                if(j % 512 == 0){
+                    __syncthreads();  
+                    // Need to do this IF check inside because the 
+                    // threads need to be synced even if they are out of bounds.
+                    if(j + threadIdx.x < num_waves){
+                        mx[threadIdx.x] = wave_means[j + threadIdx.x][0];
+                        my[threadIdx.x] = wave_means[j + threadIdx.x][1];
+                        cov00[threadIdx.x] = wave_mats[j + threadIdx.x][0][0];
+                        cov01[threadIdx.x] = wave_mats[j + threadIdx.x][0][1];
+                        cov10[threadIdx.x] = wave_mats[j + threadIdx.x][1][0];
+                        cov11[threadIdx.x] = wave_mats[j + threadIdx.x][1][1];
+                        RGB[3*threadIdx.x] = wave_colors[j + threadIdx.x][0];
+                        RGB[3*threadIdx.x+1] = wave_colors[j + threadIdx.x][1];
+                        RGB[3*threadIdx.x+2] = wave_colors[j + threadIdx.x][2];
+                        w_coeff1[threadIdx.x] = wave_coefficients[j + threadIdx.x][0];
+                        w_coeff2[threadIdx.x] = wave_coefficients[j + threadIdx.x][1];
+                        w_coeff3[threadIdx.x] = wave_coefficients[j + threadIdx.x][2];
+                        w_coeff4[threadIdx.x] = wave_coefficients[j + threadIdx.x][3];
+                        w_coeff5[threadIdx.x] = wave_coefficients[j + threadIdx.x][4];
+                        w_freqx[threadIdx.x] = wave_frequencies[j + threadIdx.x][0];
+                        w_freqy[threadIdx.x] = wave_frequencies[j + threadIdx.x][1];
+                    }
+                    __syncthreads();
+                }
+                if(i < batch_size){
+                    idx = j % 512;
+                    const float g_x = (x - mx[idx]) * cov00[idx] +
+                                (y - my[idx]) * cov10[idx];
+                    const float g_y = (x - mx[idx]) * cov01[idx] + 
+                                (y - my[idx]) * cov11[idx];
+                    const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);  
+                    if(g<0.0000001f) continue; 
+                    const float sx = sinpif(2.0f*x*w_freqx[idx]);
+                    const float sy = sinpif(2.0f*y*w_freqy[idx]);
+                    const float cx = cospif(2.0f*x*w_freqx[idx]);
+                    const float cy = cospif(2.0f*y*w_freqy[idx]);
+                    const float w = w_coeff1[idx]*cx*cy +
+                                    w_coeff2[idx]*cx*sy +
+                                    w_coeff3[idx]*sx*cy +
+                                    w_coeff4[idx]*sx*sy +
+                                    w_coeff5[idx]; 
+                    for (k = 0; k < num_channels; k++){ 
+                        if(abs(dRGB[k]) < 0.00000001f) continue;
+                        // Wave color gradient update
+                        grad_wave_colors[j][k] += dRGB[k]*g*w; 
                         
-                    // Wave covariance matrix gradient update
-                    grad_wave_mats[j][0][0] += 
-                        y[k]*w*g*wave_colors[j][k]*g_x*-(x[0] - wave_means[j][0]);
-                    grad_wave_mats[j][0][1] += 
-                        y[k]*w*g*wave_colors[j][k]*g_y*-(x[0] - wave_means[j][0]);
-                    grad_wave_mats[j][1][0] += 
-                        y[k]*w*g*wave_colors[j][k]*g_x*-(x[1] - wave_means[j][1]);
-                    grad_wave_mats[j][1][1] += 
-                        y[k]*w*g*wave_colors[j][k]*g_y*-(x[1] - wave_means[j][1]);
+                        // Wave position gradient update
+                        grad_wave_means[j][0] +=
+                            dRGB[k]*w*g*RGB[3*idx+k]*
+                            (g_x*cov00[idx]+g_y*cov01[idx]);
+                        grad_wave_means[j][1] +=
+                            dRGB[k]*w*g*RGB[3*idx+k]*
+                            (g_x*cov10[idx]+g_y*cov11[idx]);
+                            
+                        // Wave covariance matrix gradient update
+                        grad_wave_mats[j][0][0] += 
+                            dRGB[k]*w*g*RGB[3*idx+k]*g_x*-(x - mx[idx]);
+                        grad_wave_mats[j][0][1] += 
+                            dRGB[k]*w*g*RGB[3*idx+k]*g_y*-(x - mx[idx]);
+                        grad_wave_mats[j][1][0] += 
+                            dRGB[k]*w*g*RGB[3*idx+k]*g_x*-(y - my[idx]);
+                        grad_wave_mats[j][1][1] += 
+                            dRGB[k]*w*g*RGB[3*idx+k]*g_y*-(y - my[idx]);
 
-                    // Wave coefficients gradient update
-                    grad_wave_coefficients[j][0] += y[k]*g*cx*cy*wave_colors[j][k];
-                    grad_wave_coefficients[j][1] += y[k]*g*cx*sy*wave_colors[j][k];
-                    grad_wave_coefficients[j][2] += y[k]*g*sx*cy*wave_colors[j][k];
-                    grad_wave_coefficients[j][3] += y[k]*g*sx*sy*wave_colors[j][k];
-                    grad_wave_coefficients[j][4] += y[k]*g*wave_colors[j][k];
+                        // Wave coefficients gradient update
+                        grad_wave_coefficients[j][0] += dRGB[k]*g*cx*cy*RGB[3*idx+k];
+                        grad_wave_coefficients[j][1] += dRGB[k]*g*cx*sy*RGB[3*idx+k];
+                        grad_wave_coefficients[j][2] += dRGB[k]*g*sx*cy*RGB[3*idx+k];
+                        grad_wave_coefficients[j][3] += dRGB[k]*g*sx*sy*RGB[3*idx+k];
+                        grad_wave_coefficients[j][4] += dRGB[k]*g*RGB[3*idx+k];
 
-                    // Wave frequency gradient update
-                    grad_wave_frequencies[j][0] +=
-                        y[k]*g*TWO_PI*x[0]*wave_colors[j][k]*(
-                            wave_coefficients[j][0]*cy*-sx +
-                            wave_coefficients[j][1]*sy*-sx +
-                            wave_coefficients[j][2]*cy*cx +
-                            wave_coefficients[j][3]*sy*cx
-                        );
-                    grad_wave_frequencies[j][1] +=
-                        y[k]*g*TWO_PI*x[1]*wave_colors[j][k]*(
-                            wave_coefficients[j][0]*cx*-sy +
-                            wave_coefficients[j][1]*cx*cy +
-                            wave_coefficients[j][2]*sx*-sy +
-                            wave_coefficients[j][3]*sx*cy
-                        );
+                        // Wave frequency gradient update
+                        grad_wave_frequencies[j][0] +=
+                            dRGB[k]*g*2.0f*3.1415926f*x*RGB[3*idx+k]*(
+                                w_coeff1[idx]*cy*-sx +
+                                w_coeff2[idx]*sy*-sx +
+                                w_coeff3[idx]*cy*cx +
+                                w_coeff4[idx]*sy*cx
+                            );
+                        grad_wave_frequencies[j][1] +=
+                            dRGB[k]*g*2.0f*3.1415926f*y*RGB[3*idx+k]*(
+                                w_coeff1[idx]*cx*-sy +
+                                w_coeff2[idx]*cx*cy +
+                                w_coeff3[idx]*sx*-sy +
+                                w_coeff4[idx]*sx*cy
+                            );
+                    }
                 }
             }
         }
@@ -646,7 +376,7 @@ std::vector<torch::Tensor> hybrid_model_forward_cuda(
     const int threads = 512;
     int numSMs;
     cudaDeviceGetAttribute(&numSMs, cudaDevAttrMultiProcessorCount, 0);
-    const int blocks = numSMs*32;
+    const int blocks = (batch_size+threads-1)/threads;
 
     // Dispatch jobs
     AT_DISPATCH_FLOATING_TYPES(input.type(), "gaussian_cuda_forward", ([&] {
@@ -700,7 +430,7 @@ std::vector<torch::Tensor> hybrid_model_backward_cuda(
         const int threads = 512;
         int numSMs;
         cudaDeviceGetAttribute(&numSMs, cudaDevAttrMultiProcessorCount, 0);
-        const int blocks = numSMs*32;
+        const int blocks = (batch_size+threads-1)/threads;
 
         // Dispatch jobs
         AT_DISPATCH_FLOATING_TYPES(input.type(), "gaussian_cuda_backward", ([&] {

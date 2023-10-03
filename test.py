@@ -17,9 +17,9 @@ torch.backends.cudnn.allow_tf32 = True
 torch.manual_seed(7)
 
 test_iters = 10
-num_gaussians = 1000
-num_waves = 100
-num_points = 10000
+num_gaussians = 512
+num_waves = 512
+num_points = 100000
 num_dimensions = 2
 
 hp = HybridPrimitives()
