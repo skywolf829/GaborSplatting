@@ -188,6 +188,8 @@ namespace{
         __shared__ float RGB[512*3];
         __shared__ float mx[512], my[512];
         __shared__ float cov00[512], cov01[512], cov10[512], cov11[512];
+        __shared__ float w_coeff1[512], w_coeff2[512], w_coeff3[512], w_coeff4[512], w_coeff5[512];
+        __shared__ float w_freqx[512], w_freqy[512];
 
         // (x,y) input coordinate
         float x, y;
@@ -256,22 +258,47 @@ namespace{
                 }
             }
             for(j = 0; j < num_waves; j++){
+                if(j % 512 == 0){
+                    __syncthreads();  
+                    // Need to do this IF check inside because the 
+                    // threads need to be synced even if they are out of bounds.
+                    if(j + threadIdx.x < num_waves){
+                        mx[threadIdx.x] = wave_means[j + threadIdx.x][0];
+                        my[threadIdx.x] = wave_means[j + threadIdx.x][1];
+                        cov00[threadIdx.x] = wave_mats[j + threadIdx.x][0][0];
+                        cov01[threadIdx.x] = wave_mats[j + threadIdx.x][0][1];
+                        cov10[threadIdx.x] = wave_mats[j + threadIdx.x][1][0];
+                        cov11[threadIdx.x] = wave_mats[j + threadIdx.x][1][1];
+                        R[threadIdx.x] = wave_colors[j + threadIdx.x][0];
+                        G[threadIdx.x] = wave_colors[j + threadIdx.x][1];
+                        B[threadIdx.x] = wave_colors[j + threadIdx.x][2];      
+                        w_coeff1[threadIdx.x] = wave_coefficients[j + threadIdx.x][0];
+                        w_coeff2[threadIdx.x] = wave_coefficients[j + threadIdx.x][1];
+                        w_coeff3[threadIdx.x] = wave_coefficients[j + threadIdx.x][2];
+                        w_coeff4[threadIdx.x] = wave_coefficients[j + threadIdx.x][3];
+                        w_coeff5[threadIdx.x] = wave_coefficients[j + threadIdx.x][4];
+                        w_freqx[threadIdx.x] = wave_frequencies[j + threadIdx.x][0];
+                        w_freqy[threadIdx.x] = wave_frequencies[j + threadIdx.x][1];
+                    }
+                    __syncthreads();
+                }
                 if(i < batch_size){
-                    const float g_x = (x - wave_means[j][0]) * wave_mats[j][0][0] +
-                                (y - wave_means[j][1]) * wave_mats[j][1][0];
-                    const float g_y = (x - wave_means[j][0]) * wave_mats[j][0][1] + 
-                                (y - wave_means[j][1]) * wave_mats[j][1][1];
+                    idx = j % 512;
+                    const float g_x = (x - mx[idx]) * cov00[idx] +
+                                (y - my[idx]) * cov10[idx];
+                    const float g_y = (x - mx[idx]) * cov01[idx] + 
+                                (y - my[idx]) * cov11[idx];
                     const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);  
                     if(g<0.0000001f) continue; 
-                    const float sx = sinpif(2.0f*x*wave_frequencies[j][0]);
-                    const float sy = sinpif(2.0f*y*wave_frequencies[j][1]);
-                    const float cx = cospif(2.0f*x*wave_frequencies[j][0]);
-                    const float cy = cospif(2.0f*y*wave_frequencies[j][1]);
-                    const float w = wave_coefficients[j][0]*cx*cy +
-                        wave_coefficients[j][1]*cx*sy +
-                        wave_coefficients[j][2]*sx*cy +
-                        wave_coefficients[j][3]*sx*sy +
-                        wave_coefficients[j][4]; 
+                    const float sx = sinpif(2.0f*x*w_freqx[idx]);
+                    const float sy = sinpif(2.0f*y*w_freqy[idx]);
+                    const float cx = cospif(2.0f*x*w_freqx[idx]);
+                    const float cy = cospif(2.0f*y*w_freqy[idx]);
+                    const float w = w_coeff1[idx]*cx*cy +
+                        w_coeff2[idx]*cx*sy +
+                        w_coeff3[idx]*sx*cy +
+                        w_coeff4[idx]*sx*sy +
+                        w_coeff5[idx]; 
                     for (k = 0; k < num_channels; k++){ 
                         if(abs(dRGB[k]) < 0.00000001f) continue;
                         // Wave color gradient update
@@ -279,43 +306,43 @@ namespace{
                         
                         // Wave position gradient update
                         grad_wave_means[j][0] +=
-                            dRGB[k]*w*g*wave_colors[j][k]*
-                            (g_x*wave_mats[j][0][0]+g_y*wave_mats[j][0][1]);
+                            dRGB[k]*w*g*RGB[3*idx+k]*
+                            (g_x*cov00[idx]+g_y*cov01[idx]);
                         grad_wave_means[j][1] +=
-                            dRGB[k]*w*g*wave_colors[j][k]*
-                            (g_x*wave_mats[j][1][0]+g_y*wave_mats[j][1][1]);
+                            dRGB[k]*w*g*RGB[3*idx+k]*
+                            (g_x*cov10[idx]+g_y*cov11[idx]);
                             
                         // Wave covariance matrix gradient update
                         grad_wave_mats[j][0][0] += 
-                            dRGB[k]*w*g*wave_colors[j][k]*g_x*-(x - wave_means[j][0]);
+                            dRGB[k]*w*g*RGB[3*idx+k]*g_x*-(x - mx[idx]);
                         grad_wave_mats[j][0][1] += 
-                            dRGB[k]*w*g*wave_colors[j][k]*g_y*-(x - wave_means[j][0]);
+                            dRGB[k]*w*g*RGB[3*idx+k]*g_y*-(x - mx[idx]);
                         grad_wave_mats[j][1][0] += 
-                            dRGB[k]*w*g*wave_colors[j][k]*g_x*-(y - wave_means[j][1]);
+                            dRGB[k]*w*g*RGB[3*idx+k]*g_x*-(y - my[idx]);
                         grad_wave_mats[j][1][1] += 
-                            dRGB[k]*w*g*wave_colors[j][k]*g_y*-(y - wave_means[j][1]);
+                            dRGB[k]*w*g*RGB[3*idx+k]*g_y*-(y - my[idx]);
 
                         // Wave coefficients gradient update
-                        grad_wave_coefficients[j][0] += dRGB[k]*g*cx*cy*wave_colors[j][k];
-                        grad_wave_coefficients[j][1] += dRGB[k]*g*cx*sy*wave_colors[j][k];
-                        grad_wave_coefficients[j][2] += dRGB[k]*g*sx*cy*wave_colors[j][k];
-                        grad_wave_coefficients[j][3] += dRGB[k]*g*sx*sy*wave_colors[j][k];
-                        grad_wave_coefficients[j][4] += dRGB[k]*g*wave_colors[j][k];
+                        grad_wave_coefficients[j][0] += dRGB[k]*g*cx*cy*RGB[3*idx+k];
+                        grad_wave_coefficients[j][1] += dRGB[k]*g*cx*sy*RGB[3*idx+k];
+                        grad_wave_coefficients[j][2] += dRGB[k]*g*sx*cy*RGB[3*idx+k];
+                        grad_wave_coefficients[j][3] += dRGB[k]*g*sx*sy*RGB[3*idx+k];
+                        grad_wave_coefficients[j][4] += dRGB[k]*g*RGB[3*idx+k];
 
                         // Wave frequency gradient update
                         grad_wave_frequencies[j][0] +=
-                            dRGB[k]*g*2.0f*3.1415926f*x*wave_colors[j][k]*(
-                                wave_coefficients[j][0]*cy*-sx +
-                                wave_coefficients[j][1]*sy*-sx +
-                                wave_coefficients[j][2]*cy*cx +
-                                wave_coefficients[j][3]*sy*cx
+                            dRGB[k]*g*2.0f*3.1415926f*x*RGB[3*idx+k]*(
+                                w_coeff1[idx]*cy*-sx +
+                                w_coeff2[idx]*sy*-sx +
+                                w_coeff3[idx]*cy*cx +
+                                w_coeff4[idx]*sy*cx
                             );
                         grad_wave_frequencies[j][1] +=
-                            dRGB[k]*g*2.0f*3.1415926f*y*wave_colors[j][k]*(
-                                wave_coefficients[j][0]*cx*-sy +
-                                wave_coefficients[j][1]*cx*cy +
-                                wave_coefficients[j][2]*sx*-sy +
-                                wave_coefficients[j][3]*sx*cy
+                            dRGB[k]*g*2.0f*3.1415926f*y*RGB[3*idx+k]*(
+                                w_coeff1[idx]*cx*-sy +
+                                w_coeff2[idx]*cx*cy +
+                                w_coeff3[idx]*sx*-sy +
+                                w_coeff4[idx]*sx*cy
                             );
                     }
                 }
