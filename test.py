@@ -17,7 +17,7 @@ torch.backends.cudnn.allow_tf32 = True
 torch.manual_seed(7)
 
 test_iters = 10
-num_gaussians = 512
+num_gaussians = 0
 num_waves = 512
 num_points = 100000
 num_dimensions = 2

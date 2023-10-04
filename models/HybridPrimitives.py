@@ -166,7 +166,7 @@ class HybridPrimitives(torch.nn.Module):
                                                     min_influence=min_influence)
             self.ls_plot = ls_model.plot_power(return_img=True)
             self.ls_power = ls_model.power
-            num_gaussians += num_waves - n_extracted_waves
+            #num_gaussians += num_waves - n_extracted_waves
             if(n_extracted_waves > 0):
                 all_colors = ls_model.get_PCA_color()[None,:].repeat(n_extracted_waves, 1) / n_extracted_waves
 

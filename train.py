@@ -23,16 +23,16 @@ from datetime import datetime
 
 if __name__ == '__main__':
     
-    total_iters = 300000
+    total_iters = 30000
     fine_tune_iters = 5000    
-    total_primitives = 50000
-    primitives_per_update = 50
+    total_primitives = 100
+    primitives_per_update = 10
     iters_per_primitive = int((total_iters-fine_tune_iters) / (total_primitives/primitives_per_update))
     start_freq = 20
     end_freq = 512
 
     model_type = HybridPrimitives
-    img_name = "redblack_tablecloth.jpg"
+    img_name = "tablecloth.jpg"
 
     device = "cuda"
     torch.random.manual_seed(42)
@@ -117,8 +117,8 @@ if __name__ == '__main__':
                 model.prune_primitives(1./500.)
                 n_gaussians = primitives_per_update
                 n_waves = 0
-                #n_gaussians = 0
-                #n_waves = primitives_per_update
+                n_gaussians = 0
+                n_waves = primitives_per_update
                 #n_gaussians = primitives_per_update-n_waves
                 n_extracted_peaks = model.add_primitives(
                                     x[mask],
