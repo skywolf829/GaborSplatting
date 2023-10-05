@@ -117,9 +117,9 @@ if __name__ == '__main__':
                 model.prune_primitives(1./500.)
                 #n_gaussians = primitives_per_update
                 #n_waves = 0
-                n_gaussians = 0
+                #n_gaussians = 0
                 n_waves = primitives_per_update
-                #n_gaussians = primitives_per_update-n_waves
+                n_gaussians = primitives_per_update-n_waves
                 n_extracted_peaks = model.add_primitives(
                                     x[mask],
                                     residuals,
