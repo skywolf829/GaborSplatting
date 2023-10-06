@@ -2,21 +2,25 @@
 #include <vector>
 
 std::vector<torch::Tensor> periodic_primitives_forward_cuda(
-    torch::Tensor input,                // [N, n_dim]
-    torch::Tensor colors,               // [M, n_chan]
-    torch::Tensor position,             // [M, n_dim]
-    torch::Tensor cov,                  // [M, n_dim, n_dim]
-    torch::Tensor wave_coefficients,    // [M, n_dim, n_freqs]
+    torch::Tensor input,                        // [N, n_dim]
+    torch::Tensor colors,                       // [M, n_chan]
+    torch::Tensor positions,                    // [M, n_dim]
+    torch::Tensor scales,                       // [M, n_dim]
+    torch::Tensor rotations,                    // [M, 1]
+    torch::Tensor wave_coefficients,            // [M, n_dim, n_freqs]
+    torch::Tensor wave_coefficient_indices,     // [M, n_dim, n_freqs]
     const float MAX_FREQUENCY
 );
 
 std::vector<torch::Tensor> periodic_primitives_backward_cuda(
-    torch::Tensor grad_output,          // [N, n_chan]
-    torch::Tensor input,                // [N, n_dim]
-    torch::Tensor colors,               // [M, n_chan]
-    torch::Tensor position,             // [M, n_dim]
-    torch::Tensor cov,                  // [M, n_dim, n_dim]
-    torch::Tensor coefficients,        // [M, n_dim, n_freqs]
+    torch::Tensor grad_output,                  // [N, n_chan]
+    torch::Tensor input,                        // [N, n_dim]
+    torch::Tensor colors,                       // [M, n_chan]
+    torch::Tensor positions,                    // [M, n_dim]
+    torch::Tensor scales,                       // [M, n_dim, n_dim]
+    torch::Tensor rotations,                    // [M, n_dim, n_freqs]
+    torch::Tensor wave_coefficients,            // [M, n_dim, n_freqs]
+    torch::Tensor wave_coefficient_indices,     // [M, n_dim, n_freqs]
     const float MAX_FREQUENCY
     );        
 
@@ -27,53 +31,65 @@ std::vector<torch::Tensor> periodic_primitives_backward_cuda(
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
 std::vector<torch::Tensor> periodic_primitives_forward(
-    torch::Tensor input,                // [N, n_dims]
-    torch::Tensor colors,               // [M, n_chan]
-    torch::Tensor position,             // [M, n_dim]
-    torch::Tensor cov,                  // [M, n_dim, n_dim]
-    torch::Tensor coefficients,          // [M, n_dim, n_freqs]
+    torch::Tensor input,                        // [N, n_dim]
+    torch::Tensor colors,                       // [M, n_chan]
+    torch::Tensor positions,                    // [M, n_dim]
+    torch::Tensor scales,                       // [M, n_dim]
+    torch::Tensor rotations,                    // [M, 1]
+    torch::Tensor wave_coefficients,            // [M, n_dim, n_freqs]
+    torch::Tensor wave_coefficient_indices,     // [M, n_dim, n_freqs]
     const float MAX_FREQUENCY
     ) {
     CHECK_INPUT(input);
     CHECK_INPUT(colors);
-    CHECK_INPUT(position);
-    CHECK_INPUT(cov);
-    CHECK_INPUT(coefficients);
+    CHECK_INPUT(positions);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(rotations);
+    CHECK_INPUT(wave_coefficients);
+    CHECK_INPUT(wave_coefficient_indices);
 
     return periodic_primitives_forward_cuda(
         input, 
         colors,
-        position, 
-        cov,  
-        coefficients,
+        positions, 
+        scales,  
+        rotations,
+        wave_coefficients,
+        wave_coefficient_indices,
         MAX_FREQUENCY
         );
 }
 
 
 std::vector<torch::Tensor> periodic_primitives_backward(
-    torch::Tensor grad_output,          // [N, n_chans]
-    torch::Tensor input,                // [N, n_dims]
-    torch::Tensor colors,               // [M, n_chan]
-    torch::Tensor position,             // [M, n_dim]
-    torch::Tensor cov,                  // [M, n_dim, n_dim]
-    torch::Tensor coefficients,         // [M, n_dim, n_freqs]
+    torch::Tensor grad_output,                  // [N, n_chan]
+    torch::Tensor input,                        // [N, n_dim]
+    torch::Tensor colors,                       // [M, n_chan]
+    torch::Tensor positions,                    // [M, n_dim]
+    torch::Tensor scales,                       // [M, n_dim, n_dim]
+    torch::Tensor rotations,                    // [M, n_dim, n_freqs]
+    torch::Tensor wave_coefficients,            // [M, n_dim, n_freqs]
+    torch::Tensor wave_coefficient_indices,     // [M, n_dim, n_freqs]
     const float MAX_FREQUENCY
     ) {
     CHECK_INPUT(grad_output);
     CHECK_INPUT(input);
     CHECK_INPUT(colors);
-    CHECK_INPUT(position);
-    CHECK_INPUT(cov);
-    CHECK_INPUT(coefficients);
+    CHECK_INPUT(positions);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(rotations);
+    CHECK_INPUT(wave_coefficients);
+    CHECK_INPUT(wave_coefficient_indices);
 
     return periodic_primitives_backward_cuda(
         grad_output, 
         input,
         colors,
-        position, 
-        cov,  
-        coefficients,
+        positions, 
+        scales,  
+        rotations,
+        wave_coefficients,
+        wave_coefficient_indices,
         MAX_FREQUENCY
         );
 }
