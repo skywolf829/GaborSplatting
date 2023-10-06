@@ -1,14 +1,7 @@
-from models.GaussianSplatting2D import GaussianSplatting2D
-from models.PeriodicPrimitives2D import PeriodicPrimitives2D
-from models.HybridPrimitiveModel import HybridPrimitiveModel
-from models.PeriodicGaussians2D import PeriodicGaussians2D
-from models.PeriodicGaussianField import PeriodicGaussianField
-from models.SupportedPeriodicPrimitives2D import SupportedPeriodicPrimitives2D
-from models.PeriodicGaussians2Dfreqangle import PeriodicGaussians2Dfreqangle
+
 print("Loading HybridPrimitives CUDA kernel. May need to compile...")
 from models.HybridPrimitives import HybridPrimitives
 print("Successfully loaded HybridPrimitives.")
-from models.HaarPrimitives2D import HaarPrimitives2D
 from models.Siren import Siren
 from utils.data_generators import load_img
 import torch

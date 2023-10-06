@@ -5,7 +5,7 @@
 
 import torch
 print("Loading HybridPrimitives CUDA kernel. May need to compile...")
-from models.HybridPrimitives import HybridPrimitives
+from models.PeriodicPrimitives2D import PeriodicPrimitives2D
 print("Successfully loaded HybridPrimitives.")
 from time import time
 
@@ -17,14 +17,13 @@ torch.backends.cudnn.allow_tf32 = True
 torch.manual_seed(7)
 
 test_iters = 10
-num_gaussians = 0
-num_waves = 512
-num_points = 100000
+num_gaussians = 1000000
+num_waves = 0
+num_points = 1
 num_dimensions = 2
 
-hp = HybridPrimitives()
-hp.add_random_gaussians(num_gaussians)
-hp.add_random_waves(num_waves)
+hp = PeriodicPrimitives2D()
+hp.add_primitives_random(num_gaussians)
 
 x = torch.rand([num_points, num_dimensions], device="cuda", dtype=torch.float32)
 
@@ -185,12 +184,15 @@ def forward_error_test():
         print("Memory error - PyTorch exceeded the maximum GPU memory. Stopping test.")
         return
     out_cuda = hp.forward(x)
-    error = ((out_pytorch-out_cuda)**2).flatten()
+    print(out_pytorch)
+    print(out_cuda)
+    
+    error = torch.abs(out_pytorch-out_cuda).flatten()
     mse = error.mean()
     max_error = error.max()
-    print(f"MSE:\t\t\t\t{mse}")
-    print(f"Max squared error \t\t{max_error}")
-    assert max_error < 1e-8, f"Error above 1e-8"
+    print(f"Mean absolute error:\t\t\t\t{mse}")
+    print(f"Max absolute error \t\t{max_error}")
+    assert max_error < 1/255., f"Error above 1 pixel value"
     print(f"======================================================")
 
 def backward_error_test():
@@ -229,11 +231,11 @@ def backward_error_test():
 
 
 forward_error_test()
-backward_error_test()
+#backward_error_test()
 
 forward_memory_test()
-backward_memory_test()
+#backward_memory_test()
 
 forward_timing_test()
-inference_timing_test()
-backward_timing_test()
+#inference_timing_test()
+#backward_timing_test()

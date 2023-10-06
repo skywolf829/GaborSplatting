@@ -6,9 +6,9 @@ from models.LombScargle2D import LombScargle2D
 
 periodic_primitives = load(name='periodic_primitives', 
     sources=[os.path.join(os.sep.join(__file__.split(os.sep)[0:-1]),"..", "CUDA_Modules", 
-                            "PeriodicPrimitivesCUDA", 'periodic_primitives_cuda.cpp'), 
+                            "PeriodicPrimitivesCUDA", 'periodic_primitives2DRGB_cuda.cpp'), 
             os.path.join(os.sep.join(__file__.split(os.sep)[0:-1]),"..", "CUDA_Modules", 
-                            "PeriodicPrimitivesCUDA", 'periodic_primitives_cuda_kernel.cu')])
+                            "PeriodicPrimitivesCUDA", 'periodic_primitives2DRGB_cuda_kernel.cu')])
 
 class PeriodicPrimitivesFunction(torch.autograd.Function):
     @staticmethod
@@ -33,19 +33,19 @@ class PeriodicPrimitivesFunction(torch.autograd.Function):
                                             wave_coefficients.shape[1], 
                                             num_random_frequencies+num_top_frequencies],
                                             device=wave_coefficients.device,
-                                            dtype=torch.short)
-            _, indices = torch.sort(coefficients_to_send, dim=2, descending=True)
-            indices_to_send[:,:,0:num_top_frequencies] = indices[:,:,0:num_top_frequencies]
-            rand_indices = torch.randint(num_top_frequencies, wave_coefficients.shape[2], 
-                                         [wave_coefficients.shape[0], wave_coefficients.shape[1], num_random_frequencies],
-                                         dtype=torch.short, device=wave_coefficients.device)
-            indices_to_send[:,:,num_top_frequencies:] = indices[rand_indices]
-            coefficients_to_send = wave_coefficients[indices_to_send]
+                                            dtype=torch.int)
+            _, indices = torch.topk(torch.abs(wave_coefficients), num_top_frequencies+num_random_frequencies, dim=2, sorted=False)
+            indices_to_send[:,:,0:indices.shape[2]] = indices
+            #rand_indices = torch.randint(num_top_frequencies, wave_coefficients.shape[2], 
+            #                             [num_random_frequencies],
+            #                             dtype=torch.int, device=wave_coefficients.device)
+            #indices_to_send[:,:,num_top_frequencies:] = indices[:,:,rand_indices]
+            coefficients_to_send = torch.gather(wave_coefficients, 2, indices_to_send.type(torch.long))
 
         else:
             coefficients_to_send = wave_coefficients
             indices_to_send = torch.arange(0, wave_coefficients.shape[2],
-                                           dtype=torch.short, device=wave_coefficients.device)
+                                           dtype=torch.int, device=wave_coefficients.device)
             indices_to_send = indices_to_send[None,None,:].repeat(
                 wave_coefficients.shape[0], wave_coefficients.shape[1], 1)
         # First, get the tip
@@ -57,9 +57,9 @@ class PeriodicPrimitivesFunction(torch.autograd.Function):
 
         variables = [x, gaussian_colors, gaussian_positions, 
                     gaussian_scales, gaussian_rotations,
-                    wave_coefficients, indices_to_send, max_frequency]
+                    wave_coefficients, indices_to_send]
         ctx.save_for_backward(*variables)
-
+        ctx.max_frequency = max_frequency
         return result
 
     @staticmethod
@@ -70,17 +70,18 @@ class PeriodicPrimitivesFunction(torch.autograd.Function):
         with respect to the input.
         """
         
-        outputs = periodic_primitives.backward(grad_output, *ctx.saved_tensors)
+        outputs = periodic_primitives.backward(grad_output, *ctx.saved_tensors, ctx.max_frequency)
         
         grad_gaussian_colors, grad_gaussian_positions, grad_gaussian_scales, \
             grad_gaussian_rotations, grad_wave_coefficients = outputs
         return grad_output, grad_gaussian_colors, grad_gaussian_positions, \
-              grad_gaussian_scales, grad_gaussian_rotations, grad_wave_coefficients
+              grad_gaussian_scales, grad_gaussian_rotations, grad_wave_coefficients, \
+              None, None, None, None
 
 
 class PeriodicPrimitives2D(torch.nn.Module):
     def __init__(self, num_dimensions = 2, n_channels = 3, 
-                 num_frequencies = 1024, max_frequency = 1024,
+                 num_frequencies = 1024, max_frequency = 1024.,
                  num_top_freqs = 8, num_random_freqs = 8,
                  device = "cuda"):
         super(PeriodicPrimitives2D, self).__init__()
@@ -144,7 +145,7 @@ class PeriodicPrimitives2D(torch.nn.Module):
         self.gaussian_positions = updated_params['gaussian_positions']
         self.gaussian_scales = updated_params['gaussian_scales']
         self.gaussian_rotations = updated_params['gaussian_rotations']
-        self.wave_coefficients = updated_params['wave_coeffiecients']
+        self.wave_coefficients = updated_params['wave_coefficients']
 
     def get_num_primitives(self):
         return self.gaussian_colors.shape[0]
@@ -226,7 +227,7 @@ class PeriodicPrimitives2D(torch.nn.Module):
         return losses, model_out
 
     def forward(self, x) -> torch.Tensor:
-        return PeriodicPrimitives2D.apply(x, 
+        return PeriodicPrimitivesFunction.apply(x, 
             self.gaussian_colors, self.gaussian_positions, self.gaussian_scales,
             self.gaussian_rotations, self.wave_coefficients, self.num_top_freqs,
             self.num_random_freqs, self.max_frequency, self.training)
@@ -234,16 +235,40 @@ class PeriodicPrimitives2D(torch.nn.Module):
     def forward_pytorch(self, x):
         # x is [N, 2]
 
+        if(self.training):
+            coefficients_to_send = torch.empty([self.wave_coefficients.shape[0],
+                                            self.wave_coefficients.shape[1], 
+                                            self.num_random_freqs+self.num_top_freqs],
+                                            device=self.device,
+                                            dtype=self.wave_coefficients.dtype)
+            indices_to_send = torch.empty([self.wave_coefficients.shape[0],
+                                            self.wave_coefficients.shape[1], 
+                                            self.num_random_freqs+self.num_top_freqs],
+                                            device=self.device,
+                                            dtype=torch.long)
+            _, indices = torch.topk(torch.abs(self.wave_coefficients),
+                                     self.num_random_freqs+self.num_top_freqs, dim=2, sorted=False)
+            indices_to_send[:,:,0:indices.shape[2]] = indices
+            #rand_indices = torch.randint(num_top_frequencies, wave_coefficients.shape[2], 
+            #                             [num_random_frequencies],
+            #                             dtype=torch.int, device=wave_coefficients.device)
+            #indices_to_send[:,:,num_top_frequencies:] = indices[:,:,rand_indices]
+            coefficients_to_send = torch.gather(self.wave_coefficients, 2, indices_to_send)
+
+        else:
+            coefficients_to_send = self.wave_coefficients
+            indices_to_send = torch.arange(0, self.wave_coefficients.shape[2],
+                                           dtype=torch.int, device=self.device)
+            indices_to_send = indices_to_send[None,None,:].repeat(
+                self.wave_coefficients.shape[0], self.wave_coefficients.shape[1], 1)
+            
         t_x = x[:,None,0] - self.gaussian_positions[None,:,0]
         t_y = x[:,None,1] - self.gaussian_positions[None,:,1]
-        t_x = t_x*torch.cos(self.gaussian_rotations[None,0]) + \
-                t_y*torch.sin(self.gaussian_rotations[None,0])
-        t_y = t_x*-torch.sin(self.gaussian_rotations[None,0]) + \
-                t_y*torch.cos(self.gaussian_rotations[None,0])
-        t_x = t_x*self.gaussian_scales[None,:,0]
-        t_y = t_y*self.gaussian_scales[None,:,1]
-        g = t_x*t_x + t_y*t_y
-        g = torch.exp(-g/2)
+        rs_x = self.gaussian_scales[None,:,0]*(t_x*torch.cos(self.gaussian_rotations[None,:,0]) + \
+                t_y*torch.sin(self.gaussian_rotations[None,:,0]))
+        rs_y = self.gaussian_scales[None,:,1]*(t_x*-torch.sin(self.gaussian_rotations[None,:,0]) + \
+                t_y*torch.cos(self.gaussian_rotations[None,:,0]))
+        g = torch.exp(-(rs_x*rs_x + rs_y*rs_y)/2.)
         output = g@self.gaussian_colors
             
         return output 
