@@ -52,31 +52,52 @@ namespace{
         
         // Iterate over the primitives this is responsible for
         for(int i = index; i < NUM_PRIMITIVES; i += stride){
+            // iterate over each dimension 
             for(int j = 0; j < NUM_DIMENSIONS; j++){
 
+                // Holder arrays for the top coefficients and their indices
                 float topk[SELECTED_NUM_FREQUENCIES];
                 int topk_indices[SELECTED_NUM_FREQUENCIES];
 
+                // the index in the float* array
                 int start_ind = i*NUM_DIMENSIONS*NUM_FREQUENCIES + j*NUM_FREQUENCIES;
-                float minVal = 0;
-                float maxVal = wave_coefficients[start_ind];
-                topk[0] = wave_coefficients[start_ind];
-                topk_indices[0] = 0;
 
-                for(int k = 0; k < NUM_FREQUENCIES; k++){
+                // Holders for the smallest coeff in the topK
+                float minVal = fabsf(wave_coefficients[0]);
+                int minIdx = 0;
+
+                // Put the first K values in immediately
+                for(int k = 0; k < SELECTED_NUM_FREQUENCIES; k++){
+                    topk[k] = fabsf(wave_coefficients[start_ind+k]);
+                    topk_indices[0] = k;
+                    if(topk[k] < minVal){ minVal = topk[k]; minIdx = k;}
+                }
+
+                // Iterate over all the frequencies' coefficients
+                for(int k = SELECTED_NUM_FREQUENCIES; k < NUM_FREQUENCIES; k++){
                     int idx = start_ind + k;
                     float v = wave_coefficients[idx];
+                    float absv = fabsf(v);
+                    // If we find one with a larger coeff than the min, we can immediately update
                     if(fabsf(v) > minVal){
-                        int minIdx = 0;
-                        
+                        topk[minIdx] = absv; 
+                        topk_indices[minIdx] = k;
+                        // But then we have to update the minIdx and minval             
+                        minIdx = 0;     
+                        minVal = topk[0];     
                         for (int m = 1; m < SELECTED_NUM_FREQUENCIES; m++){
-
+                            if(topk[m] < minVal){ minVal = topk[m], minIdx = m;}
                         }
                     }
                 }
+                memcpy(&top_wave_coefficient_values[i*NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES+j*SELECTED_NUM_FREQUENCIES], 
+                        &topk,
+                        SELECTED_NUM_FREQUENCIES*sizeof(float));
+                memcpy(&top_wave_coefficient_indices[i*NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES+j*SELECTED_NUM_FREQUENCIES], 
+                        &topk_indices,
+                        SELECTED_NUM_FREQUENCIES*sizeof(int));
             }
         }
-    
     }
 
     __global__ void periodic_primitives_forward_cuda_kernel(  
@@ -202,12 +223,12 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
 
     // Create output tensor
     auto output = torch::zeros({batch_size, NUM_CHANNELS}, input.device());
-    auto options = torch::TensorOptions()
-        .dtype(torch::kInt32)
-        .device(input.device());
-    auto wave_coefficient_indices = torch::zeros(
+    auto top_wave_coefficient_values = torch::zeros(
         {num_primitives, NUM_DIMENSIONS, SELECTED_NUM_FREQUENCIES},
-        options);
+        torch::TensorOptions().dtype(torch::kFloat32).device(input.device()));
+    auto top_wave_coefficient_indices = torch::zeros(
+        {num_primitives, NUM_DIMENSIONS, SELECTED_NUM_FREQUENCIES},
+        torch::TensorOptions().dtype(torch::kInt32).device(input.device()));
 
     // If we want to adjust the number of blocks, this is a good way
     // Scales with the number of SMs on the GPU
@@ -216,8 +237,15 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
 
     // First get the top K frequencies from each waveform
     // Faster to launch a different kernel to parallelize over gaussians
-
+    top_k_frequencies_cuda<<<(num_primitives+NUM_THREADS-1)/NUM_THREADS, NUM_THREADS>>>(
+        num_primitives,
+        num_frequencies,
+        wave_coefficients.contiguous().data<float>(),
+        top_wave_coefficient_values.contiguous().data<float>(),
+        top_wave_coefficient_indices.contiguous().data<int>()
+    );
     
+    // Now parallelize over query points
     periodic_primitives_forward_cuda_kernel<<<(batch_size+NUM_THREADS-1)/NUM_THREADS, NUM_THREADS>>>(
         num_primitives,
         batch_size,
@@ -228,8 +256,8 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
         positions.contiguous().data<float>(),
         scales.contiguous().data<float>(),
         rotations.contiguous().data<float>(),
-        wave_coefficients.contiguous().data<float>(),
-        wave_coefficient_indices.contiguous().data<int>(),
+        top_wave_coefficient_values.contiguous().data<float>(),
+        top_wave_coefficient_indices.contiguous().data<int>(),
         output.contiguous().data<float>()
         );
 
