@@ -136,7 +136,7 @@ namespace{
         
         float2 x;
         // Iterate over the query points this thread is responsible for
-        for(int i = index; i < BATCH_SIZE; i += stride){
+        for(int i = index; i < BATCH_SIZE && false; i += stride){
             
             float3 temp_result = { 0.0f, 0.0f, 0.0f };
             x = {input[2*i], input[2*i+1]};
