@@ -114,7 +114,7 @@ namespace{
         }
     }
 
-    __global__ void periodic_primitives_forward_cuda_kernel_global(  
+    __global__ void periodic_primitives_forward_cuda_kernel_new(  
         int NUM_PRIMITIVES,
         int BATCH_SIZE,   
         int NUM_FREQUENCIES,   
@@ -130,42 +130,47 @@ namespace{
         ) {
 
         // Get block/thread related numbers   
-        const int index = blockIdx.x * blockDim.x + threadIdx.x;
-        const int stride = blockDim.x * gridDim.x;
-                    
+        const int primitive_to_load = blockIdx.y * blockDim.y + threadIdx.y;
+        const int query_point_to_load = blockIdx.x;
+        if(primitive_to_load > NUM_PRIMITIVES) return;
+
+        // Declare shared floats for later
+        __shared__ float3 RGB[blockDim.y];
+        __shared__ float2 p[blockDim.y];
+        __shared__ float2 s[blockDim.y];
+        __shared__ float r[blockDim.y];
+        //__shared__ float c[NUM_THREADS][NUM_DIMENSIONS][SELECTED_NUM_FREQUENCIES];
+        p[threadIdx.y] = { positions[2*threadIdx.y], positions[2*threadIdx.y + 1] };
+        s[threadIdx.y] = { scales[2*threadIdx.y], scales[2*threadIdx.y + 1] };
+        r[threadIdx.y] = rotations[threadIdx.y];
+        RGB[threadIdx.y] = { colors[3*threadIdx.y], colors[3*threadIdx.y + 1], colors[3*threadIdx.y + 2] };
+        //memcpy(&c[threadIdx.x], &wave_coefficients[j+threadIdx.x], 
+        //    NUM_DIMENSIONS*NUM_FREQUENCIES*sizeof(float));
+        __syncthreads();
+
+        if(query_point_to_load > BATCH_SIZE) return;
+
         
-        float2 x;
-        // Iterate over the query points this thread is responsible for
-        for(int i = index; i < BATCH_SIZE; i += stride){
-            float3 temp_result = { 0.0f, 0.0f, 0.0f };
-            x = {input[2*i], input[2*i+1]};
-
-            
-            // Loop over primitives
-            for(int j = 0; j < NUM_PRIMITIVES; j++){  
-                // Get the gaussian weight for this primitive
-                float2 px = {x.x - positions[2*j], x.y - positions[2*j+1]};
-                
-                float cosr = cosf(rotations[j]);
-                float sinr = sinf(rotations[j]);
-                float2 tx = { scales[j*2]*(px.x*cosr  + px.y*sinr),
-                                scales[j*2+1]*(px.x*-sinr + px.y*cosr) };
-                float g = expf(-(tx.x*tx.x + tx.y*tx.y) / 2.0f);
-                if(g < 0.00000001f) continue;
-
-                // Update local result
-                temp_result.x += g*colors[3*j];
-                temp_result.y += g*colors[3*j+1];
-                temp_result.z += g*colors[3*j+2];
-                
-            }
-
-            output[i*3] = temp_result.x;
-            output[i*3+1] = temp_result.y;
-            output[i*3+2] = temp_result.z;
-            
+        float2 x = {input[2*i], input[2*i+1]};
+        float3 temp_result = { 0.0f, 0.0f, 0.0f };
+        
+        for(int j = 0; j < blockDim.y && blockIdx.y * blockDim.y + j < NUM_PRIMITIVES; j++){
+            // Get the gaussian weight for this primitive
+            float2 px = x - p[j];
+            float cosr = __cosf(r[j]);
+            float sinr = __sinf(r[j]);
+            float2 tx = { s[j].x*(px.x*cosr  + px.y*sinr),
+                        s[j].y*(px.x*-sinr + px.y*cosr) };
+            float g = __expf(-(tx.x*tx.x + tx.y*tx.y)/2);
+            if(g < 0.00000001f) continue;
+            // Update local result
+            temp_result += g*RGB[j];
         }
+        atomicAdd(&output[i*3], temp_result.x);
+        atomicAdd(&output[i*3+1], temp_result.y);
+        atomicAdd(&output[i*3+2], temp_result.z);
     }
+
 
     __global__ void periodic_primitives_backward_cuda_kernel(
         const int NUM_PRIMITIVES,
@@ -218,9 +223,10 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     cudaDeviceGetAttribute(&numSMs, cudaDevAttrMultiProcessorCount, 0);
     
     // Now parallelize over query points
-
-    periodic_primitives_forward_cuda_kernel<<<(batch_size+NUM_THREADS-1)/NUM_THREADS, NUM_THREADS>>>(
-    //periodic_primitives_forward_cuda_kernel<<<128*numSMs, NUM_THREADS>>>(
+    auto threads = dim3(1, NUM_THREADS, 1);
+    auto blocks = dim3(batch_size, (num_primitives+NUM_THREADS-1)/NUM_THREADS, 1);
+    periodic_primitives_forward_cuda_kernel_new<<<blocks, threads>>>(
+    //periodic_primitives_forward_cuda_kernel<<<(batch_size+NUM_THREADS-1)/NUM_THREADS, NUM_THREADS>>>(
         num_primitives,
         batch_size,
         num_frequencies,
