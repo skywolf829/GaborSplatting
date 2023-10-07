@@ -8,7 +8,7 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     torch::Tensor scales,                       // [M, n_dim]
     torch::Tensor rotations,                    // [M, 1]
     torch::Tensor wave_coefficients,            // [M, n_dim, n_freqs]
-    torch::Tensor wave_coefficient_indices,     // [M, n_dim, n_freqs]
+    torch::Tensor wave_coefficient_indices,
     const float MAX_FREQUENCY
 );
 
@@ -46,7 +46,6 @@ std::vector<torch::Tensor> periodic_primitives_forward(
     CHECK_INPUT(scales);
     CHECK_INPUT(rotations);
     CHECK_INPUT(wave_coefficients);
-    CHECK_INPUT(wave_coefficient_indices);
 
     return periodic_primitives_forward_cuda(
         input, 

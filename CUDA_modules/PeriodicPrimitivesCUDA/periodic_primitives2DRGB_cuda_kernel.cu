@@ -3,7 +3,8 @@
 #include <cuda_runtime.h>
 #include <vector>
 
-#define NUM_THREADS 32
+#define NUM_THREADS 512
+#define TOTAL_NUM_FREQUENCIES 1024
 #define SELECTED_NUM_FREQUENCIES 16
 #define NUM_CHANNELS 3
 #define NUM_DIMENSIONS 2
@@ -34,72 +35,6 @@ __device__ float2 operator-=(float2 &a, const float2 &b) {
 
 namespace{
 
-    __global__ void top_k_frequencies_cuda(  
-        int NUM_PRIMITIVES,
-        int NUM_FREQUENCIES,
-        const float* __restrict__ wave_coefficients,
-        float* __restrict__ top_wave_coefficient_values,
-        int* __restrict__ top_wave_coefficient_indices
-        ) {
-
-        // Get block/thread related numbers   
-        const int index = blockIdx.x * blockDim.x + threadIdx.x;
-        const int stride = blockDim.x * gridDim.x;
-                    
-        // Declare shared floats for later
-        __shared__ float coeffs[NUM_THREADS];
-        //__shared__ float c[NUM_THREADS][NUM_DIMENSIONS][SELECTED_NUM_FREQUENCIES];
-        
-        // Iterate over the primitives this is responsible for
-        for(int i = index; i < NUM_PRIMITIVES; i += stride){
-            // iterate over each dimension 
-            for(int j = 0; j < NUM_DIMENSIONS; j++){
-
-                // Holder arrays for the top coefficients and their indices
-                float topk[SELECTED_NUM_FREQUENCIES];
-                int topk_indices[SELECTED_NUM_FREQUENCIES];
-
-                // the index in the float* array
-                int start_ind = i*NUM_DIMENSIONS*NUM_FREQUENCIES + j*NUM_FREQUENCIES;
-
-                // Holders for the smallest coeff in the topK
-                float minVal = fabsf(wave_coefficients[0]);
-                int minIdx = 0;
-
-                // Put the first K values in immediately
-                for(int k = 0; k < SELECTED_NUM_FREQUENCIES; k++){
-                    topk[k] = fabsf(wave_coefficients[start_ind+k]);
-                    topk_indices[0] = k;
-                    if(topk[k] < minVal){ minVal = topk[k]; minIdx = k;}
-                }
-
-                // Iterate over all the frequencies' coefficients
-                for(int k = SELECTED_NUM_FREQUENCIES; k < NUM_FREQUENCIES; k++){
-                    int idx = start_ind + k;
-                    float v = wave_coefficients[idx];
-                    float absv = fabsf(v);
-                    // If we find one with a larger coeff than the min, we can immediately update
-                    if(fabsf(v) > minVal){
-                        topk[minIdx] = absv; 
-                        topk_indices[minIdx] = k;
-                        // But then we have to update the minIdx and minval             
-                        minIdx = 0;     
-                        minVal = topk[0];     
-                        for (int m = 1; m < SELECTED_NUM_FREQUENCIES; m++){
-                            if(topk[m] < minVal){ minVal = topk[m], minIdx = m;}
-                        }
-                    }
-                }
-                memcpy(&top_wave_coefficient_values[i*NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES+j*SELECTED_NUM_FREQUENCIES], 
-                        &topk,
-                        SELECTED_NUM_FREQUENCIES*sizeof(float));
-                memcpy(&top_wave_coefficient_indices[i*NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES+j*SELECTED_NUM_FREQUENCIES], 
-                        &topk_indices,
-                        SELECTED_NUM_FREQUENCIES*sizeof(int));
-            }
-        }
-    }
-
     __global__ void periodic_primitives_forward_cuda_kernel(  
         int NUM_PRIMITIVES,
         int BATCH_SIZE,   
@@ -126,22 +61,22 @@ namespace{
         __shared__ float r[NUM_THREADS];
         //__shared__ float c[NUM_THREADS][NUM_DIMENSIONS][SELECTED_NUM_FREQUENCIES];
         
-
-
+        float2 x;
         // Iterate over the query points this thread is responsible for
         for(int i = index; i < NUM_THREADS*(1+BATCH_SIZE/NUM_THREADS); i += stride){
             
             float3 temp_result = { 0.0f, 0.0f, 0.0f };
-            
+            if(i<BATCH_SIZE) x = {input[2*i], input[2*i+1]};
+
             // Loop over primitives
             for(int j = 0; j < NUM_PRIMITIVES; j++){  
 
                 // Load shared memory every block_size (NUM_THREADS threads)
                 // All threads do this even if theyre beyond the batch size
                 if(j % NUM_THREADS == 0){
-                    __syncthreads();  
                     // Need to do this IF check inside because the 
                     // threads need to be synced even if they are out of bounds.
+                    __syncthreads();
                     if(j + threadIdx.x < NUM_PRIMITIVES){
                         p[threadIdx.x] = { positions[2*(j+threadIdx.x)], positions[2*(j+threadIdx.x) + 1] };
                         s[threadIdx.x] = { scales[2*(j+threadIdx.x)], scales[2*(j+threadIdx.x) + 1] };
@@ -152,23 +87,22 @@ namespace{
                     }
                     __syncthreads();
                 }
+                if( i >= BATCH_SIZE) continue;
+
+                int idx = j % NUM_THREADS;
+
+                // Get the gaussian weight for this primitive
+                float2 px = x - p[idx];
+                float cosr = cosf(r[idx]);
+                float sinr = sinf(r[idx]);
+                float2 tx = { s[idx].x*(px.x*cosr  + px.y*sinr),
+                            s[idx].y*(px.x*-sinr + px.y*cosr) };
+                float g = expf(-(tx.x*tx.x + tx.y*tx.y) / 2.0f);
+                if(g < 0.00000001f) continue;
+
+                // Update local result
+                temp_result += g*RGB[idx];
                 
-                // Threads within the batch size process the output using the current shared memory
-                if(i < BATCH_SIZE){
-                    int idx = j % NUM_THREADS;
-                    float2 x = { input[2*i], input[2*i+1] };
-
-                    // Get the gaussian weight for this primitive
-                    x -= p[idx];
-                    float cosr = cosf(r[idx]);
-                    float sinr = sinf(r[idx]);
-                    float2 tx = make_float2(s[idx].x*(x.x*cosr  + x.y*sinr),
-                                            s[idx].y*(x.x*-sinr + x.y*cosr));
-                    float g = expf(-(tx.x*tx.x + tx.y*tx.y) / 2.0f);
-
-                    // Update local result
-                    temp_result += g*RGB[idx];
-                }
             }
 
             // Update global memory with the final result
@@ -213,6 +147,7 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     torch::Tensor scales,                       // [M, n_dim]
     torch::Tensor rotations,                    // [M, 1]
     torch::Tensor wave_coefficients,            // [M, n_dim, n_freqs]
+    torch::Tensor wave_coefficient_indices,    // [M, n_dim, n_freqs]
     const float MAX_FREQUENCY
     ) {
 
@@ -222,44 +157,31 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     const int num_frequencies = wave_coefficients.size(2);
 
     // Create output tensor
-    auto output = torch::zeros({batch_size, NUM_CHANNELS}, input.device());
-    auto top_wave_coefficient_values = torch::zeros(
-        {num_primitives, NUM_DIMENSIONS, SELECTED_NUM_FREQUENCIES},
-        torch::TensorOptions().dtype(torch::kFloat32).device(input.device()));
-    auto top_wave_coefficient_indices = torch::zeros(
-        {num_primitives, NUM_DIMENSIONS, SELECTED_NUM_FREQUENCIES},
-        torch::TensorOptions().dtype(torch::kInt32).device(input.device()));
-
+    auto output = torch::empty({batch_size, NUM_CHANNELS}, input.device());
+    
     // If we want to adjust the number of blocks, this is a good way
     // Scales with the number of SMs on the GPU
-    //int numSMs;
-    //cudaDeviceGetAttribute(&numSMs, cudaDevAttrMultiProcessorCount, 0);
-
-    // First get the top K frequencies from each waveform
-    // Faster to launch a different kernel to parallelize over gaussians
-    top_k_frequencies_cuda<<<(num_primitives+NUM_THREADS-1)/NUM_THREADS, NUM_THREADS>>>(
-        num_primitives,
-        num_frequencies,
-        wave_coefficients.contiguous().data<float>(),
-        top_wave_coefficient_values.contiguous().data<float>(),
-        top_wave_coefficient_indices.contiguous().data<int>()
-    );
+    int numSMs;
+    cudaDeviceGetAttribute(&numSMs, cudaDevAttrMultiProcessorCount, 0);
     
     // Now parallelize over query points
+
     periodic_primitives_forward_cuda_kernel<<<(batch_size+NUM_THREADS-1)/NUM_THREADS, NUM_THREADS>>>(
+    //periodic_primitives_forward_cuda_kernel<<<128*numSMs, NUM_THREADS>>>(
         num_primitives,
         batch_size,
         num_frequencies,
         MAX_FREQUENCY,
-        input.contiguous().data<float>(),
-        colors.contiguous().data<float>(),
-        positions.contiguous().data<float>(),
-        scales.contiguous().data<float>(),
-        rotations.contiguous().data<float>(),
-        top_wave_coefficient_values.contiguous().data<float>(),
-        top_wave_coefficient_indices.contiguous().data<int>(),
-        output.contiguous().data<float>()
+        input.contiguous().data_ptr<float>(),
+        colors.contiguous().data_ptr<float>(),
+        positions.contiguous().data_ptr<float>(),
+        scales.contiguous().data_ptr<float>(),
+        rotations.contiguous().data_ptr<float>(),
+        wave_coefficients.contiguous().data_ptr<float>(),
+        wave_coefficient_indices.contiguous().data_ptr<int>(),
+        output.contiguous().data_ptr<float>()
         );
+        
 
     return {output};
 }
@@ -300,19 +222,19 @@ std::vector<torch::Tensor> periodic_primitives_backward_cuda(
             num_frequencies_backward,
             total_num_frequencies,
             MAX_FREQUENCY,
-            grad_output.contiguous().data<float>(),
-            input.contiguous().data<float>(),
-            colors.contiguous().data<float>(),
-            positions.contiguous().data<float>(),
-            scales.contiguous().data<float>(),
-            rotations.contiguous().data<float>(),
-            wave_coefficients.contiguous().data<float>(),
-            wave_coefficient_indices.contiguous().data<int>(),
-            dColors.contiguous().data<float>(),
-            dPositions.contiguous().data<float>(),
-            dScales.contiguous().data<float>(),
-            dRotations.contiguous().data<float>(),
-            dCoefficients.contiguous().data<float>()
+            grad_output.contiguous().data_ptr<float>(),
+            input.contiguous().data_ptr<float>(),
+            colors.contiguous().data_ptr<float>(),
+            positions.contiguous().data_ptr<float>(),
+            scales.contiguous().data_ptr<float>(),
+            rotations.contiguous().data_ptr<float>(),
+            wave_coefficients.contiguous().data_ptr<float>(),
+            wave_coefficient_indices.contiguous().data_ptr<int>(),
+            dColors.contiguous().data_ptr<float>(),
+            dPositions.contiguous().data_ptr<float>(),
+            dScales.contiguous().data_ptr<float>(),
+            dRotations.contiguous().data_ptr<float>(),
+            dCoefficients.contiguous().data_ptr<float>()
             );
     
         return {dColors, dPositions, dScales, dRotations, dCoefficients };

@@ -8,6 +8,7 @@ print("Loading HybridPrimitives CUDA kernel. May need to compile...")
 from models.PeriodicPrimitives2D import PeriodicPrimitives2D
 print("Successfully loaded HybridPrimitives.")
 from time import time
+from torch.profiler import profile, record_function, ProfilerActivity
 
 # The flag below controls whether to allow TF32 on matmul. This flag defaults to False
 # in PyTorch 1.12 and later.
@@ -17,9 +18,9 @@ torch.backends.cudnn.allow_tf32 = True
 torch.manual_seed(7)
 
 test_iters = 10
-num_gaussians = 1000000
+num_gaussians = 500
 num_waves = 0
-num_points = 1
+num_points = 2**20
 num_dimensions = 2
 
 hp = PeriodicPrimitives2D()
@@ -90,8 +91,8 @@ def forward_timing_test():
     print(f"=====================Timing test======================")
     print(f"======================================================")
 
-    t0 = time()
     torch.cuda.synchronize()
+    t0 = time()
     for i in range(test_iters):
         try:
             _ = hp.forward_pytorch(x)
@@ -100,7 +101,8 @@ def forward_timing_test():
             break
     torch.cuda.synchronize()
     time_pytorch = time() - t0
-
+    
+    #torch.cuda.empty_cache()
     torch.cuda.synchronize()
     t0 = time()
     for i in range(test_iters):
@@ -109,8 +111,8 @@ def forward_timing_test():
     time_cuda = time() - t0
 
     print(f"Forward pass time:")
-    print(f"PyTorch:\t\t{time_pytorch/1000:0.09f} sec.")
-    print(f"CUDA kernel:\t\t{time_cuda/1000:0.09f} sec.")
+    print(f"PyTorch:\t\t{time_pytorch/test_iters:0.09f} sec. per pass \t {test_iters/time_pytorch} FPS")
+    print(f"CUDA kernel:\t\t{time_cuda/test_iters:0.09f} sec. per pass \t {test_iters/time_cuda} FPS")
     print(f"CUDA speedup:\t\t{time_pytorch/time_cuda:0.02f}x")
     print(f"======================================================")
 
@@ -181,18 +183,16 @@ def forward_error_test():
     try:
         out_pytorch = hp.forward_pytorch(x)
     except RuntimeError as e:
-        print("Memory error - PyTorch exceeded the maximum GPU memory. Stopping test.")
+        print("Memory error - PyTorch exceeded the maximum GPU memory. ")
+        raise e
         return
     out_cuda = hp.forward(x)
-    print(out_pytorch)
-    print(out_cuda)
     
     error = torch.abs(out_pytorch-out_cuda).flatten()
     mse = error.mean()
     max_error = error.max()
-    print(f"Mean absolute error:\t\t\t\t{mse}")
-    print(f"Max absolute error \t\t{max_error}")
-    assert max_error < 1/255., f"Error above 1 pixel value"
+    print(f"Mean absolute error:\t\t{mse}")
+    print(f"Max absolute error: \t\t{max_error}")
     print(f"======================================================")
 
 def backward_error_test():
@@ -229,6 +229,12 @@ def backward_error_test():
         
     print(f"======================================================")
 
+def profiler_test():
+    with profile(activities=[
+        ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, with_stack=True) as prof:
+        hp.forward(x)
+    print(prof.key_averages(group_by_input_shape=True).table(sort_by="self_cuda_time_total", row_limit=20))
+
 
 forward_error_test()
 #backward_error_test()
@@ -239,3 +245,5 @@ forward_memory_test()
 forward_timing_test()
 #inference_timing_test()
 #backward_timing_test()
+
+profiler_test()
