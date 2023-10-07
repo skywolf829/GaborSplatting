@@ -3,7 +3,7 @@
 #include <cuda_runtime.h>
 #include <vector>
 
-#define NUM_THREADS 512
+#define NUM_THREADS 256
 #define TOTAL_NUM_FREQUENCIES 1024
 #define SELECTED_NUM_FREQUENCIES 16
 #define NUM_CHANNELS 3
@@ -93,11 +93,11 @@ namespace{
 
                 // Get the gaussian weight for this primitive
                 float2 px = x - p[idx];
-                float cosr = cosf(r[idx]);
-                float sinr = sinf(r[idx]);
+                float cosr = __cosf(r[idx]);
+                float sinr = __sinf(r[idx]);
                 float2 tx = { s[idx].x*(px.x*cosr  + px.y*sinr),
                             s[idx].y*(px.x*-sinr + px.y*cosr) };
-                float g = expf(-(tx.x*tx.x + tx.y*tx.y) / 2.0f);
+                float g = __expf(-(tx.x*tx.x + tx.y*tx.y)/2);
                 if(g < 0.00000001f) continue;
 
                 // Update local result
@@ -107,9 +107,9 @@ namespace{
 
             // Update global memory with the final result
             if(i < BATCH_SIZE){
-                output[i*3] = temp_result.x;
-                output[i*3+1] = temp_result.y;
-                output[i*3+2] = temp_result.z;
+                atomicAdd(&output[i*3], temp_result.x);
+                atomicAdd(&output[i*3+1], temp_result.y);
+                atomicAdd(&output[i*3+2], temp_result.z);
             }
         }
     }
@@ -136,16 +136,16 @@ namespace{
         
         float2 x;
         // Iterate over the query points this thread is responsible for
-        for(int i = index; i < BATCH_SIZE && false; i += stride){
-            
+        for(int i = index; i < BATCH_SIZE; i += stride){
             float3 temp_result = { 0.0f, 0.0f, 0.0f };
             x = {input[2*i], input[2*i+1]};
 
+            
             // Loop over primitives
             for(int j = 0; j < NUM_PRIMITIVES; j++){  
-
                 // Get the gaussian weight for this primitive
                 float2 px = {x.x - positions[2*j], x.y - positions[2*j+1]};
+                
                 float cosr = cosf(rotations[j]);
                 float sinr = sinf(rotations[j]);
                 float2 tx = { scales[j*2]*(px.x*cosr  + px.y*sinr),
@@ -160,12 +160,10 @@ namespace{
                 
             }
 
-            // Update global memory with the final result
-            if(i < BATCH_SIZE){
-                output[i*3] = temp_result.x;
-                output[i*3+1] = temp_result.y;
-                output[i*3+2] = temp_result.z;
-            }
+            output[i*3] = temp_result.x;
+            output[i*3+1] = temp_result.y;
+            output[i*3+2] = temp_result.z;
+            
         }
     }
 
@@ -221,7 +219,7 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     
     // Now parallelize over query points
 
-    periodic_primitives_forward_cuda_kernel_global<<<(batch_size+NUM_THREADS-1)/NUM_THREADS, NUM_THREADS>>>(
+    periodic_primitives_forward_cuda_kernel<<<(batch_size+NUM_THREADS-1)/NUM_THREADS, NUM_THREADS>>>(
     //periodic_primitives_forward_cuda_kernel<<<128*numSMs, NUM_THREADS>>>(
         num_primitives,
         batch_size,
