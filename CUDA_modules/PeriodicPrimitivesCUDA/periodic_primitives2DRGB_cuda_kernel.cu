@@ -36,22 +36,22 @@ __device__ float2 operator-=(float2 &a, const float2 &b) {
 }
 
 
-__device__ __forceinline__ int get256bitOffset(const uint32_t bits[8], const int offset){
+__device__ __forceinline__ bool get256bitOffset(const uint32_t* bits, const int offset){
     int idx = offset / 32;
     int shift = offset % 32;
-    return ((bits[idx]>>shift)&1) == 1 ? 1 : 0;    
+    return ((bits[idx]>>shift)&1) == 1;    
 }
 
-__device__ __forceinline__ void set256bitOffset(uint32_t bits[8], const int offset){
+__device__ __forceinline__ void set256bitOffset(uint32_t* bits, const int offset){
     int idx = offset / 32;
     int shift = offset % 32;
-    //bits[idx] = bits[idx] | ((uint32_t)1 << offset)
+    bits[idx] = bits[idx] | ((uint32_t)1 << offset)
 }
 
 
 namespace{
 
-    __global__ void periodic_primitives_forward_cuda_kernel_old(  
+    __global__ void periodic_primitives_forward_cuda_kernel_pointwise(  
         int NUM_PRIMITIVES,
         int BATCH_SIZE,   
         int NUM_FREQUENCIES,   
@@ -130,62 +130,7 @@ namespace{
         }
     }
 
-    
-    __global__ void preprocess_gaussians(  
-        int NUM_PRIMITIVES,
-        float min_x, float min_y, 
-        float range_x, float range_y,
-        const float* __restrict__ positions,
-        const float* __restrict__ scales,
-        uint32_t* __restrict__ gaussian_blocks
-        ) {
-            // Get block/thread related numbers   
-            const int index = blockIdx.x * blockDim.x + threadIdx.x;
-            const int stride = blockDim.x * gridDim.x;
-            for(int i = index; i < NUM_PRIMITIVES; i += stride){
-                uint32_t block_values[8] = {(uint32_t)0,(uint32_t)0,(uint32_t)0,(uint32_t)0,
-                                            (uint32_t)0,(uint32_t)0,(uint32_t)0,(uint32_t)0};
-                float sx = scales[2*i];
-                float sy = scales[2*i+1];
-                float px = positions[2*i];
-                float py = positions[2*i+1];
-                float r = 3.0f/min(sx, sy);
-
-                float x_min = px - r;
-                float x_max = px + r;
-                float y_min = py - r;
-                float y_max = py + r;
-                x_min -= min_x;
-                x_max -= min_x;
-                x_min /= range_x;
-                x_max /= range_x;
-                y_min -= min_y;
-                y_max -= min_y;
-                y_min /= range_y;
-                y_max /= range_y;
-                int x_block_min = x_min*BLOCKS_X;
-                int x_block_max = x_max*BLOCKS_X;
-                int y_block_min = y_min*BLOCKS_Y;
-                int y_block_max = y_max*BLOCKS_Y;
-                if(x_block_min < 0) x_block_min = 0;
-                if(y_block_min < 0) y_block_min = 0;
-                for (int x = x_block_min; x <= x_block_max; x++){
-                    for (int y = y_block_min; y <= y_block_max; y++){
-                        set256bitOffset(block_values, y*BLOCKS_X+x);
-                    }
-                }
-                gaussian_blocks[8*i] = block_values[0];
-                gaussian_blocks[8*i+1] = block_values[1];
-                gaussian_blocks[8*i+2] = block_values[2];
-                gaussian_blocks[8*i+3] = block_values[3];
-                gaussian_blocks[8*i+4] = block_values[4];
-                gaussian_blocks[8*i+5] = block_values[5];
-                gaussian_blocks[8*i+6] = block_values[6];
-                gaussian_blocks[8*i+7] = block_values[7];
-            }
-        }
-
-    __global__ void periodic_primitives_forward_cuda_kernel(  
+    __global__ void periodic_primitives_forward_cuda_kernel_efficient(  
         int NUM_PRIMITIVES,
         int BATCH_SIZE,   
         int NUM_FREQUENCIES,   
@@ -257,6 +202,116 @@ namespace{
         atomicAdd(&output[i*3+2], temp_result.z);
     }
 
+    __global__ void preprocess_gaussians(  
+        int NUM_PRIMITIVES,
+        float min_x, float min_y, 
+        float range_x, float range_y,
+        const float* __restrict__ positions,
+        const float* __restrict__ scales,
+        uint32_t* __restrict__ gaussian_blocks
+        ) {
+            // Get block/thread related numbers   
+            const int index = blockIdx.x * blockDim.x + threadIdx.x;
+            const int stride = blockDim.x * gridDim.x;
+            for(int i = index; i < NUM_PRIMITIVES; i += stride){
+                uint32_t block_values[8] = {(uint32_t)0,(uint32_t)0,(uint32_t)0,(uint32_t)0,
+                                            (uint32_t)0,(uint32_t)0,(uint32_t)0,(uint32_t)0};
+                float sx = scales[2*i];
+                float sy = scales[2*i+1];
+                float px = positions[2*i];
+                float py = positions[2*i+1];
+                float r = 3.0f/min(sx, sy);
+
+                float x_min = px - r;
+                float x_max = px + r;
+                float y_min = py - r;
+                float y_max = py + r;
+                x_min -= min_x;
+                x_max -= min_x;
+                x_min /= range_x;
+                x_max /= range_x;
+                y_min -= min_y;
+                y_max -= min_y;
+                y_min /= range_y;
+                y_max /= range_y;
+                int x_block_min = x_min*BLOCKS_X;
+                int x_block_max = x_max*BLOCKS_X;
+                int y_block_min = y_min*BLOCKS_Y;
+                int y_block_max = y_max*BLOCKS_Y;
+                if(x_block_min < 0) x_block_min = 0;
+                if(y_block_min < 0) y_block_min = 0;
+                for (int x = x_block_min; x <= x_block_max; x++){
+                    for (int y = y_block_min; y <= y_block_max; y++){
+                        set256bitOffset(block_values, y*BLOCKS_X+x);
+                    }
+                }
+                gaussian_blocks[8*i] = block_values[0];
+                gaussian_blocks[8*i+1] = block_values[1];
+                gaussian_blocks[8*i+2] = block_values[2];
+                gaussian_blocks[8*i+3] = block_values[3];
+                gaussian_blocks[8*i+4] = block_values[4];
+                gaussian_blocks[8*i+5] = block_values[5];
+                gaussian_blocks[8*i+6] = block_values[6];
+                gaussian_blocks[8*i+7] = block_values[7];
+            }
+        }
+
+    __global__ void periodic_primitives_forward_cuda_kernel(  
+        int NUM_PRIMITIVES,
+        int BATCH_SIZE,   
+        int NUM_FREQUENCIES,   
+        float MAX_FREQUENCY,
+        float min_x, float min_y, 
+        float range_x, float range_y,
+        const float* __restrict__ input,
+        const float* __restrict__ colors,
+        const float* __restrict__ positions,
+        const float* __restrict__ scales,
+        const float* __restrict__ rotations,
+        const float* __restrict__ wave_coefficients,
+        const int* __restrict__ wave_coefficient_indices,
+        const uint32_t* __restrict__ gaussian_blocks
+        float* __restrict__ output
+        ) {
+
+        // Get block/thread related numbers   
+        const int threadID = blockIdx.x * blockDim.x + threadIdx.x;
+        const int block_x = blockDim.x;
+        const int block_y = blockDim.y;
+       
+
+        for(int i = threadID; i < BATCH_SIZE; i+=NUM_THREADS){
+            float2 x = {input[2*i], input[2*i+1]};
+            int bx = BLOCKS_X*(x.x - min_x)/range_x;
+            int by = BLOCKS_Y*(x.y - min_y)/range_y;
+            if(bx < 0) bx = 0;
+            if(by < 0) by = 0;
+            if(bx != block_x || by != block_y) continue;
+
+            float3 temp_result = {0.0f, 0.0f, 0.0f};
+            for(int idx = 0; idx < NUM_PRIMITIVES; idx++){
+                if(!get256bitOffset(gaussian_blocks[8*idx], block_y*BLOCKS_X+block_x)) continue;
+
+                float3 color = {colors[3*idx], colors[3*idx+1], colors[3*idx+2]};
+                float2 position = { positions[2*idx], positions[2*idx+1]};
+                float2 scale = { scales[2*idx], scales[2*idx+1]};
+                float rotation = rotations[idx];
+                float2 dx = x - pos;
+                
+                float cosr = __cosf(rotation);
+                float sinr = __sinf(rotation);
+                float2 tx = { scale.x*(dx.x*cosr  + dx.y*sinr),
+                            scale.y*(dx.x*-sinr + dx.y*cosr) };
+                float g = __expf(-(tx.x*tx.x + tx.y*tx.y)/2);
+
+                temp_result += g*color;
+            }
+            output[i*3] = temp_result.x;
+            output[i*3+1] = temp_result.y;
+            output[i*3+2] = temp_result.z;            
+        }
+    }
+
 
     __global__ void periodic_primitives_backward_cuda_kernel(
         const int NUM_PRIMITIVES,
@@ -303,7 +358,7 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     const int num_frequencies = wave_coefficients.size(2);
 
     // Create output tensor and other tensors
-    auto output = torch::zeros({batch_size, NUM_CHANNELS}, input.device());
+    auto output = torch::empty({batch_size, NUM_CHANNELS}, input.device());
     uint32_t *gaussian_blocks;
     unsigned long long bytes_needed = (8ull)*num_primitives*sizeof(uint32_t);
     cudaError_t status = cudaMalloc((void**)&gaussian_blocks, bytes_needed);
@@ -316,23 +371,27 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     int numSMs;
     cudaDeviceGetAttribute(&numSMs, cudaDevAttrMultiProcessorCount, 0);
     
-    
+    float range_x = max_x - min_x + 0.0000001f;
+    float range_y = max_y - min_y + 0.0000001f;
     preprocess_gaussians<<<(num_primitives+NUM_THREADS-1)/NUM_THREADS,NUM_THREADS>>>(  
         num_primitives,
         min_x, min_y,
-        max_x - min_x + 0.0000001f, max_y - min_y + 0.0000001f,
+        range_x, range_y,
         positions.contiguous().data_ptr<float>(),
         scales.contiguous().data_ptr<float>(),
         gaussian_blocks
         );
 
     // Now parallelize over query points
-    dim3 numBlocks ((batch_size+NUM_THREADS-1)/NUM_THREADS, (num_primitives+NUM_THREADS-1)/NUM_THREADS);
+    //dim3 numBlocks ((batch_size+NUM_THREADS-1)/NUM_THREADS, (num_primitives+NUM_THREADS-1)/NUM_THREADS);
+    dim3 numBlocks(BLOCKS_X, BLOCKS_Y);
     periodic_primitives_forward_cuda_kernel<<<numBlocks, NUM_THREADS>>>(
         num_primitives,
         batch_size,
         num_frequencies,
         MAX_FREQUENCY,
+        min_x, min_y,
+        range_x, range_y,
         input.contiguous().data_ptr<float>(),
         colors.contiguous().data_ptr<float>(),
         positions.contiguous().data_ptr<float>(),
@@ -340,7 +399,7 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
         rotations.contiguous().data_ptr<float>(),
         wave_coefficients.contiguous().data_ptr<float>(),
         wave_coefficient_indices.contiguous().data_ptr<int>(),
-        //radii.contiguous().data_ptr<float>(),
+        gaussian_blocks,
         output.contiguous().data_ptr<float>()
         );
         
