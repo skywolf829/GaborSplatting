@@ -33,13 +33,13 @@ __device__ float2 operator-=(float2 &a, const float2 &b) {
     a.y -= b.y;
 }
 
-__device__ int get256bitOffset(uint64_t[4] bits, int offset){
+__device__ __forceinline__ int get256bitOffset(const uint64_t bits[4], const int offset){
     int idx = offset / 64;
     int shift = offset % 64;
     return ((bits[idx]>>shift)&1) == 1 ? 1 : 0;    
 }
 
-__device__ void set256bitOffset(uint64_t[4] bits, int offset){
+__device__ __forceinline__ void set256bitOffset(uint64_t bits[4], const int offset){
     int idx = offset / 64;
     int shift = offset % 64;
     uint64_t v = 1 << shift;
@@ -141,12 +141,13 @@ namespace{
             const int stride = blockDim.x * gridDim.x;
             
             for(int i = index; i < NUM_PRIMITIVES; i += stride){
-                uint64_t block_values[4] = gaussian_blocks[4*i];
+                uint64_t block_values[4] = { gaussian_blocks[4*i], gaussian_blocks[4*i+1], 
+                                        gaussian_blocks[4*i+2], gaussian_blocks[4*i+3] };
                 float sx = scales[2*i];
                 float sy = scales[2*i+1];
                 float px = positions[2*i];
                 float py = positions[2*i+1];
-                float r = 3/min(sx, sy);
+                float r = 3.0f/min(sx, sy);
 
                 float x_min = px - r;
                 float x_max = px + r;
@@ -169,7 +170,10 @@ namespace{
                         set256bitOffset(block_values, y*blocksX+x);
                     }
                 }
-                gaussian_blocks[4*i] = block_values;
+                gaussian_blocks[4*i] = block_values[0];
+                gaussian_blocks[4*i+1] = block_values[1];
+                gaussian_blocks[4*i+2] = block_values[2];
+                gaussian_blocks[4*i+3] = block_values[3];
             }
         }
 
