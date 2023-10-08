@@ -18,9 +18,9 @@ torch.backends.cudnn.allow_tf32 = True
 torch.manual_seed(7)
 
 test_iters = 10
-num_gaussians = 1000000
+num_gaussians = 10000
 num_waves = 0
-num_points = 100000
+num_points = 1
 num_dimensions = 2
 
 hp = PeriodicPrimitives2D()
@@ -242,7 +242,7 @@ def profiler_test():
     print(prof.key_averages(group_by_input_shape=True).table(sort_by="self_cuda_time_total", row_limit=20))
 
 
-#forward_error_test()
+forward_error_test()
 #backward_error_test()
 
 forward_memory_test()
@@ -251,5 +251,4 @@ forward_memory_test()
 forward_timing_test()
 #inference_timing_test()
 #backward_timing_test()
-
-profiler_test()
+#profiler_test()

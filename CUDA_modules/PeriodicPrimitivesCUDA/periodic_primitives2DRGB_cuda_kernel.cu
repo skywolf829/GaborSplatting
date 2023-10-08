@@ -35,17 +35,17 @@ __device__ float2 operator-=(float2 &a, const float2 &b) {
     a.y -= b.y;
 }
 
-__device__ __forceinline__ int get256bitOffset(const uint64_t bits[4], const int offset){
-    int idx = offset / 64;
-    int shift = offset % 64;
+
+__device__ __forceinline__ int get256bitOffset(const uint32_t bits[8], const int offset){
+    int idx = offset / 32;
+    int shift = offset % 32;
     return ((bits[idx]>>shift)&1) == 1 ? 1 : 0;    
 }
 
-__device__ __forceinline__ void set256bitOffset(uint64_t bits[4], const int offset){
-    int idx = offset / 64;
-    int shift = offset % 64;
-    uint64_t v = 1 << shift;
-    bits[idx] |= v;
+__device__ __forceinline__ void set256bitOffset(uint32_t bits[8], const int offset){
+    int idx = offset / 32;
+    int shift = offset % 32;
+    //bits[idx] = bits[idx] | ((uint32_t)1 << offset)
 }
 
 
@@ -130,21 +130,21 @@ namespace{
         }
     }
 
+    
     __global__ void preprocess_gaussians(  
         int NUM_PRIMITIVES,
         float min_x, float min_y, 
         float range_x, float range_y,
         const float* __restrict__ positions,
         const float* __restrict__ scales,
-        uint64_t* __restrict__ gaussian_blocks
+        uint32_t* __restrict__ gaussian_blocks
         ) {
             // Get block/thread related numbers   
             const int index = blockIdx.x * blockDim.x + threadIdx.x;
             const int stride = blockDim.x * gridDim.x;
-            
             for(int i = index; i < NUM_PRIMITIVES; i += stride){
-                uint64_t block_values[4] = { gaussian_blocks[4*i], gaussian_blocks[4*i+1], 
-                                        gaussian_blocks[4*i+2], gaussian_blocks[4*i+3] };
+                uint32_t block_values[8] = {(uint32_t)0,(uint32_t)0,(uint32_t)0,(uint32_t)0,
+                                            (uint32_t)0,(uint32_t)0,(uint32_t)0,(uint32_t)0};
                 float sx = scales[2*i];
                 float sy = scales[2*i+1];
                 float px = positions[2*i];
@@ -155,14 +155,14 @@ namespace{
                 float x_max = px + r;
                 float y_min = py - r;
                 float y_max = py + r;
-                x_min -= min_boundary.x;
-                x_max -= min_boundary.x;
-                x_min /= boundary_range.x;
-                x_max /= boundary_range.x;
-                y_min -= min_boundary.y;
-                y_max -= min_boundary.x;
-                y_min /= boundary_range.y;
-                y_max /= boundary_range.y;
+                x_min -= min_x;
+                x_max -= min_x;
+                x_min /= range_x;
+                x_max /= range_x;
+                y_min -= min_y;
+                y_max -= min_y;
+                y_min /= range_y;
+                y_max /= range_y;
                 int x_block_min = x_min*BLOCKS_X;
                 int x_block_max = x_max*BLOCKS_X;
                 int y_block_min = y_min*BLOCKS_Y;
@@ -174,10 +174,14 @@ namespace{
                         set256bitOffset(block_values, y*BLOCKS_X+x);
                     }
                 }
-                gaussian_blocks[4*i] = block_values[0];
-                gaussian_blocks[4*i+1] = block_values[1];
-                gaussian_blocks[4*i+2] = block_values[2];
-                gaussian_blocks[4*i+3] = block_values[3];
+                gaussian_blocks[8*i] = block_values[0];
+                gaussian_blocks[8*i+1] = block_values[1];
+                gaussian_blocks[8*i+2] = block_values[2];
+                gaussian_blocks[8*i+3] = block_values[3];
+                gaussian_blocks[8*i+4] = block_values[4];
+                gaussian_blocks[8*i+5] = block_values[5];
+                gaussian_blocks[8*i+6] = block_values[6];
+                gaussian_blocks[8*i+7] = block_values[7];
             }
         }
 
@@ -199,7 +203,7 @@ namespace{
         // Get block/thread related numbers   
         const int i = blockIdx.x * blockDim.x + threadIdx.x;
         const int num_to_process = min(NUM_THREADS, NUM_PRIMITIVES - blockIdx.y * blockDim.y);
-        const int j = blockIdx.y * blockDim.x + (threadIdx.x % num_to_process);
+        const int j = blockIdx.y * blockDim.x + threadIdx.x ;
 
 
         // Declare shared floats
@@ -209,17 +213,18 @@ namespace{
         __shared__ float r[NUM_THREADS];
         __shared__ float c[NUM_THREADS*NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES];
         
-        // Coalesced memory reads
-        p[threadIdx.x] = positions[j];
-        p[threadIdx.x+NUM_THREADS] = positions[NUM_THREADS+j];
-        s[threadIdx.x] = scales[j];
-        s[threadIdx.x+NUM_THREADS] = scales[NUM_THREADS+j];
-        r[threadIdx.x] = rotations[j];
-        RGB[threadIdx.x] = colors[j];
-        RGB[threadIdx.x+NUM_THREADS] = colors[NUM_THREADS+j];
-        RGB[threadIdx.x+NUM_THREADS*2] = colors[2*NUM_THREADS+j];
-        //memcpy(&c[threadIdx.x], &wave_coefficients[j+threadIdx.x], 
-        //    NUM_DIMENSIONS*NUM_FREQUENCIES*sizeof(float));
+        if(j < NUM_PRIMITIVES){
+            p[2*threadIdx.x] = positions[2*j];
+            p[2*threadIdx.x+1] = positions[2*j+1];
+            s[2*threadIdx.x] = scales[2*j];
+            s[2*threadIdx.x+1] = scales[2*j+1];
+            r[threadIdx.x] = rotations[j];
+            RGB[3*threadIdx.x] = colors[3*j];
+            RGB[3*threadIdx.x+1] = colors[3*j+1];
+            RGB[3*threadIdx.x+2] = colors[3*j+2];
+            //memcpy(&c[threadIdx.x], &wave_coefficients[j+threadIdx.x], 
+            //    NUM_DIMENSIONS*NUM_FREQUENCIES*sizeof(float));
+        }
     
         __syncthreads();
         if(i >= BATCH_SIZE) return;
@@ -299,21 +304,27 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
 
     // Create output tensor and other tensors
     auto output = torch::zeros({batch_size, NUM_CHANNELS}, input.device());
-    uint64_t gaussian_blocks[num_primitives*4];
-
+    uint32_t *gaussian_blocks;
+    unsigned long long bytes_needed = (8ull)*num_primitives*sizeof(uint32_t);
+    cudaError_t status = cudaMalloc((void**)&gaussian_blocks, bytes_needed);
+    if (status != cudaSuccess) {
+        fprintf(stderr, "cudaMalloc failed: %s\n", cudaGetErrorString(status));
+        return {output};
+    }
     // If we want to adjust the number of blocks, this is a good way
     // Scales with the number of SMs on the GPU
     int numSMs;
     cudaDeviceGetAttribute(&numSMs, cudaDevAttrMultiProcessorCount, 0);
     
+    
     preprocess_gaussians<<<(num_primitives+NUM_THREADS-1)/NUM_THREADS,NUM_THREADS>>>(  
         num_primitives,
         min_x, min_y,
-        max_x - min_x, max_y - min_y,
+        max_x - min_x + 0.00000001f, max_y - min_y + 0.00000001f,
         positions.contiguous().data_ptr<float>(),
         scales.contiguous().data_ptr<float>(),
         gaussian_blocks
-        )
+        );
 
     // Now parallelize over query points
     dim3 numBlocks ((batch_size+NUM_THREADS-1)/NUM_THREADS, (num_primitives+NUM_THREADS-1)/NUM_THREADS);
@@ -333,7 +344,7 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
         output.contiguous().data_ptr<float>()
         );
         
-
+    cudaFree(gaussian_blocks);
     return {output};
 }
 

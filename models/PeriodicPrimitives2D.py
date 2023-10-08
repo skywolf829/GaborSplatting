@@ -24,10 +24,12 @@ class PeriodicPrimitivesFunction(torch.autograd.Function):
         objects for use in the backward pass using the ctx.save_for_backward method.
         """
         
-        # First, get the tip
         outputs = periodic_primitives.forward(x, 
             gaussian_colors, gaussian_positions, gaussian_scales,
-            gaussian_rotations, topk_wave_coefficients, topk_wave_indices, max_frequency)
+            gaussian_rotations, topk_wave_coefficients, topk_wave_indices, 
+            gaussian_positions[:,0].min(), gaussian_positions[:,0].max(),
+            gaussian_positions[:,1].min(), gaussian_positions[:,1].max(),
+            max_frequency)
         result = outputs[0]
 
         variables = [x, gaussian_colors, gaussian_positions, 
