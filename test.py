@@ -20,7 +20,7 @@ torch.manual_seed(7)
 test_iters = 10
 num_gaussians = 10000
 num_waves = 0
-num_points = 1
+num_points = 1000
 num_dimensions = 2
 
 hp = PeriodicPrimitives2D()

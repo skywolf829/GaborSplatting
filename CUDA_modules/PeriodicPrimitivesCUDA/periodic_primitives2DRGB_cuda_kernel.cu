@@ -320,7 +320,7 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     preprocess_gaussians<<<(num_primitives+NUM_THREADS-1)/NUM_THREADS,NUM_THREADS>>>(  
         num_primitives,
         min_x, min_y,
-        max_x - min_x + 0.00000001f, max_y - min_y + 0.00000001f,
+        max_x - min_x + 0.0000001f, max_y - min_y + 0.0000001f,
         positions.contiguous().data_ptr<float>(),
         scales.contiguous().data_ptr<float>(),
         gaussian_blocks
