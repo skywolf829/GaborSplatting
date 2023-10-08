@@ -8,6 +8,8 @@
 #define SELECTED_NUM_FREQUENCIES 16
 #define NUM_CHANNELS 3
 #define NUM_DIMENSIONS 2
+#define BLOCKS_X 16
+#define BLOCKS_Y 16
 
 
 __device__ float3 operator*(const float a, const float3 &b) {
@@ -130,8 +132,8 @@ namespace{
 
     __global__ void preprocess_gaussians(  
         int NUM_PRIMITIVES,
-        float2 min_boundary, float2 boundary_range,
-        int blocksX, int blocksY,
+        float min_x, float min_y, 
+        float range_x, float range_y,
         const float* __restrict__ positions,
         const float* __restrict__ scales,
         uint64_t* __restrict__ gaussian_blocks
@@ -161,13 +163,15 @@ namespace{
                 y_max -= min_boundary.x;
                 y_min /= boundary_range.y;
                 y_max /= boundary_range.y;
-                int x_block_min = x_min*blocksX;
-                int x_block_max = x_max*blocksX;
-                int y_block_min = y_min*blocksY;
-                int y_block_max = y_max*blocksY;
+                int x_block_min = x_min*BLOCKS_X;
+                int x_block_max = x_max*BLOCKS_X;
+                int y_block_min = y_min*BLOCKS_Y;
+                int y_block_max = y_max*BLOCKS_Y;
+                if(x_block_min < 0) x_block_min = 0;
+                if(y_block_min < 0) y_block_min = 0;
                 for (int x = x_block_min; x <= x_block_max; x++){
                     for (int y = y_block_min; y <= y_block_max; y++){
-                        set256bitOffset(block_values, y*blocksX+x);
+                        set256bitOffset(block_values, y*BLOCKS_X+x);
                     }
                 }
                 gaussian_blocks[4*i] = block_values[0];
@@ -283,6 +287,8 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     torch::Tensor rotations,                    // [M, 1]
     torch::Tensor wave_coefficients,            // [M, n_dim, n_freqs]
     torch::Tensor wave_coefficient_indices,    // [M, n_dim, n_freqs]
+    const float min_x, const float max_x, 
+    const float min_y, const float max_y,
     const float MAX_FREQUENCY
     ) {
 
@@ -293,13 +299,21 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
 
     // Create output tensor and other tensors
     auto output = torch::zeros({batch_size, NUM_CHANNELS}, input.device());
-    auto radii = torch::empty({num_primitives}, input.device());
+    uint64_t gaussian_blocks[num_primitives*4];
 
     // If we want to adjust the number of blocks, this is a good way
     // Scales with the number of SMs on the GPU
     int numSMs;
     cudaDeviceGetAttribute(&numSMs, cudaDevAttrMultiProcessorCount, 0);
     
+    preprocess_gaussians<<<(num_primitives+NUM_THREADS-1)/NUM_THREADS,NUM_THREADS>>>(  
+        num_primitives,
+        min_x, min_y,
+        max_x - min_x, max_y - min_y,
+        positions.contiguous().data_ptr<float>(),
+        scales.contiguous().data_ptr<float>(),
+        gaussian_blocks
+        )
 
     // Now parallelize over query points
     dim3 numBlocks ((batch_size+NUM_THREADS-1)/NUM_THREADS, (num_primitives+NUM_THREADS-1)/NUM_THREADS);
