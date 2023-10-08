@@ -3,11 +3,12 @@
 #include <cuda_runtime.h>
 #include <vector>
 
-#define NUM_THREADS 256
+#define NUM_THREADS 1024
 #define TOTAL_NUM_FREQUENCIES 1024
 #define SELECTED_NUM_FREQUENCIES 16
 #define NUM_CHANNELS 3
 #define NUM_DIMENSIONS 2
+
 
 __device__ float3 operator*(const float a, const float3 &b) {
     return make_float3(a*b.x, a*b.y, a*b.z);
@@ -35,7 +36,7 @@ __device__ float2 operator-=(float2 &a, const float2 &b) {
 
 namespace{
 
-    __global__ void periodic_primitives_forward_cuda_kernel(  
+    __global__ void periodic_primitives_forward_cuda_kernel_old(  
         int NUM_PRIMITIVES,
         int BATCH_SIZE,   
         int NUM_FREQUENCIES,   
@@ -114,7 +115,25 @@ namespace{
         }
     }
 
-    __global__ void periodic_primitives_forward_cuda_kernel_new(  
+    __global__ void preprocess_gaussians(  
+        int NUM_PRIMITIVES,
+        float2 min_boundary, float2 max_boundary,
+        const float* __restrict__ scales,
+        float* __restrict__ radii,        
+        float* __restrict__ radii
+        ) {
+            // Get block/thread related numbers   
+            const int index = blockIdx.x * blockDim.x + threadIdx.x;
+            const int stride = blockDim.x * gridDim.x;
+            
+            for(int i = index; i < NUM_PRIMITIVES; i += stride){
+                float sx = scales[2*i];
+                float sy = scales[2*i+1];
+                radii[i] = 3/min(sx, sy);
+            }
+        }
+
+    __global__ void periodic_primitives_forward_cuda_kernel(  
         int NUM_PRIMITIVES,
         int BATCH_SIZE,   
         int NUM_FREQUENCIES,   
@@ -130,41 +149,55 @@ namespace{
         ) {
 
         // Get block/thread related numbers   
-        const int primitive_to_load = blockIdx.y * blockDim.y + threadIdx.y;
-        const int query_point_to_load = blockIdx.x;
-        if(primitive_to_load > NUM_PRIMITIVES) return;
+        const int i = blockIdx.x * blockDim.x + threadIdx.x;
+        const int num_to_process = min(NUM_THREADS, NUM_PRIMITIVES - blockIdx.y * blockDim.y);
+        const int j = blockIdx.y * blockDim.x + (threadIdx.x % num_to_process);
 
-        // Declare shared floats for later
-        __shared__ float3 RGB[blockDim.y];
-        __shared__ float2 p[blockDim.y];
-        __shared__ float2 s[blockDim.y];
-        __shared__ float r[blockDim.y];
-        //__shared__ float c[NUM_THREADS][NUM_DIMENSIONS][SELECTED_NUM_FREQUENCIES];
-        p[threadIdx.y] = { positions[2*threadIdx.y], positions[2*threadIdx.y + 1] };
-        s[threadIdx.y] = { scales[2*threadIdx.y], scales[2*threadIdx.y + 1] };
-        r[threadIdx.y] = rotations[threadIdx.y];
-        RGB[threadIdx.y] = { colors[3*threadIdx.y], colors[3*threadIdx.y + 1], colors[3*threadIdx.y + 2] };
+
+        // Declare shared floats
+        __shared__ float RGB[NUM_THREADS*3];
+        __shared__ float p[NUM_THREADS*2];
+        __shared__ float s[NUM_THREADS*2];
+        __shared__ float r[NUM_THREADS];
+        __shared__ float c[NUM_THREADS*NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES];
+        
+        // Coalesced memory reads
+        p[threadIdx.x] = positions[j];
+        p[threadIdx.x+NUM_THREADS] = positions[NUM_THREADS+j];
+        s[threadIdx.x] = scales[j];
+        s[threadIdx.x+NUM_THREADS] = scales[NUM_THREADS+j];
+        r[threadIdx.x] = rotations[j];
+        RGB[threadIdx.x] = colors[j];
+        RGB[threadIdx.x+NUM_THREADS] = colors[NUM_THREADS+j];
+        RGB[threadIdx.x+NUM_THREADS*2] = colors[2*NUM_THREADS+j];
         //memcpy(&c[threadIdx.x], &wave_coefficients[j+threadIdx.x], 
         //    NUM_DIMENSIONS*NUM_FREQUENCIES*sizeof(float));
+    
         __syncthreads();
+        if(i >= BATCH_SIZE) return;
 
-        if(query_point_to_load > BATCH_SIZE) return;
-
-        
         float2 x = {input[2*i], input[2*i+1]};
         float3 temp_result = { 0.0f, 0.0f, 0.0f };
         
-        for(int j = 0; j < blockDim.y && blockIdx.y * blockDim.y + j < NUM_PRIMITIVES; j++){
-            // Get the gaussian weight for this primitive
-            float2 px = x - p[j];
-            float cosr = __cosf(r[j]);
-            float sinr = __sinf(r[j]);
-            float2 tx = { s[j].x*(px.x*cosr  + px.y*sinr),
-                        s[j].y*(px.x*-sinr + px.y*cosr) };
+
+        for(int idx = 0; idx < num_to_process; idx++){
+            float2 pos = {p[2*idx], p[2*idx+1] };
+            float2 scale = { s[2*idx], s[2*idx+1]};
+            float rotation = r[idx];
+            float3 color = {RGB[3*idx], RGB[3*idx+1], RGB[3*idx+2]};
+            //temp_result.x += color.x + rotation + scale.x + pos.x;
+            //temp_result.y += color.y + rotation + scale.y + pos.y;
+            //temp_result.z += color.z;
+            //continue;
+            float2 dx = x - pos;
+            
+            float cosr = __cosf(rotation);
+            float sinr = __sinf(rotation);
+            float2 tx = { scale.x*(dx.x*cosr  + dx.y*sinr),
+                        scale.y*(dx.x*-sinr + dx.y*cosr) };
             float g = __expf(-(tx.x*tx.x + tx.y*tx.y)/2);
-            if(g < 0.00000001f) continue;
-            // Update local result
-            temp_result += g*RGB[j];
+
+            temp_result += g*color;
         }
         atomicAdd(&output[i*3], temp_result.x);
         atomicAdd(&output[i*3+1], temp_result.y);
@@ -214,19 +247,19 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     const int num_primitives = colors.size(0);
     const int num_frequencies = wave_coefficients.size(2);
 
-    // Create output tensor
-    auto output = torch::empty({batch_size, NUM_CHANNELS}, input.device());
-    
+    // Create output tensor and other tensors
+    auto output = torch::zeros({batch_size, NUM_CHANNELS}, input.device());
+    auto radii = torch::empty({num_primitives}, input.device());
+
     // If we want to adjust the number of blocks, this is a good way
     // Scales with the number of SMs on the GPU
     int numSMs;
     cudaDeviceGetAttribute(&numSMs, cudaDevAttrMultiProcessorCount, 0);
     
+
     // Now parallelize over query points
-    auto threads = dim3(1, NUM_THREADS, 1);
-    auto blocks = dim3(batch_size, (num_primitives+NUM_THREADS-1)/NUM_THREADS, 1);
-    periodic_primitives_forward_cuda_kernel_new<<<blocks, threads>>>(
-    //periodic_primitives_forward_cuda_kernel<<<(batch_size+NUM_THREADS-1)/NUM_THREADS, NUM_THREADS>>>(
+    dim3 numBlocks ((batch_size+NUM_THREADS-1)/NUM_THREADS, (num_primitives+NUM_THREADS-1)/NUM_THREADS);
+    periodic_primitives_forward_cuda_kernel<<<numBlocks, NUM_THREADS>>>(
         num_primitives,
         batch_size,
         num_frequencies,
@@ -238,6 +271,7 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
         rotations.contiguous().data_ptr<float>(),
         wave_coefficients.contiguous().data_ptr<float>(),
         wave_coefficient_indices.contiguous().data_ptr<int>(),
+        //radii.contiguous().data_ptr<float>(),
         output.contiguous().data_ptr<float>()
         );
         
