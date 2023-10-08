@@ -33,6 +33,19 @@ __device__ float2 operator-=(float2 &a, const float2 &b) {
     a.y -= b.y;
 }
 
+__device__ int get256bitOffset(uint64_t[4] bits, int offset){
+    int idx = offset / 64;
+    int shift = offset % 64;
+    return ((bits[idx]>>shift)&1) == 1 ? 1 : 0;    
+}
+
+__device__ void set256bitOffset(uint64_t[4] bits, int offset){
+    int idx = offset / 64;
+    int shift = offset % 64;
+    uint64_t v = 1 << shift;
+    bits[idx] |= v;
+}
+
 
 namespace{
 
@@ -117,19 +130,46 @@ namespace{
 
     __global__ void preprocess_gaussians(  
         int NUM_PRIMITIVES,
-        float2 min_boundary, float2 max_boundary,
+        float2 min_boundary, float2 boundary_range,
+        int blocksX, int blocksY,
+        const float* __restrict__ positions,
         const float* __restrict__ scales,
-        float* __restrict__ radii,        
-        float* __restrict__ radii
+        uint64_t* __restrict__ gaussian_blocks
         ) {
             // Get block/thread related numbers   
             const int index = blockIdx.x * blockDim.x + threadIdx.x;
             const int stride = blockDim.x * gridDim.x;
             
             for(int i = index; i < NUM_PRIMITIVES; i += stride){
+                uint64_t block_values[4] = gaussian_blocks[4*i];
                 float sx = scales[2*i];
                 float sy = scales[2*i+1];
-                radii[i] = 3/min(sx, sy);
+                float px = positions[2*i];
+                float py = positions[2*i+1];
+                float r = 3/min(sx, sy);
+
+                float x_min = px - r;
+                float x_max = px + r;
+                float y_min = py - r;
+                float y_max = py + r;
+                x_min -= min_boundary.x;
+                x_max -= min_boundary.x;
+                x_min /= boundary_range.x;
+                x_max /= boundary_range.x;
+                y_min -= min_boundary.y;
+                y_max -= min_boundary.x;
+                y_min /= boundary_range.y;
+                y_max /= boundary_range.y;
+                int x_block_min = x_min*blocksX;
+                int x_block_max = x_max*blocksX;
+                int y_block_min = y_min*blocksY;
+                int y_block_max = y_max*blocksY;
+                for (int x = x_block_min; x <= x_block_max; x++){
+                    for (int y = y_block_min; y <= y_block_max; y++){
+                        set256bitOffset(block_values, y*blocksX+x);
+                    }
+                }
+                gaussian_blocks[4*i] = block_values;
             }
         }
 
