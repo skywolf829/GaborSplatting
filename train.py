@@ -1,8 +1,9 @@
 
 print("Loading HybridPrimitives CUDA kernel. May need to compile...")
-from models.HybridPrimitives import HybridPrimitives
+#from models.HybridPrimitives import HybridPrimitives
+from models.PeriodicPrimitives2D import PeriodicPrimitives2D
 print("Successfully loaded HybridPrimitives.")
-from models.Siren import Siren
+#from models.Siren import Siren
 from utils.data_generators import load_img
 import torch
 import matplotlib.pyplot as plt
@@ -18,13 +19,13 @@ if __name__ == '__main__':
     
     total_iters = 30000
     fine_tune_iters = 5000    
-    total_primitives = 250000
-    primitives_per_update = 50000
+    total_primitives = 2500
+    primitives_per_update = 100
     iters_per_primitive = int((total_iters-fine_tune_iters) / (total_primitives/primitives_per_update))
     start_freq = 20
     end_freq = 512
 
-    model_type = HybridPrimitives
+    model_type = PeriodicPrimitives2D
     img_name = "truck.jpg"
 
     device = "cuda"
@@ -114,14 +115,15 @@ if __name__ == '__main__':
                 #n_waves = primitives_per_update
                 #n_gaussians = primitives_per_update-n_waves
                 n_extracted_peaks = model.add_primitives(
-                                    x[mask],
-                                    residuals,
-                                    n_freqs = 180, 
+                                    #x[mask],
+                                    #residuals,
+                                    #n_freqs = 180, 
                                     #n_angles = 180,
-                                    max_freq=(total_iters-i)*start_freq/total_iters+i*end_freq/total_iters, 
-                                    min_influence=1./500.,
-                                    num_waves = n_waves,
-                                    num_gaussians = n_gaussians
+                                    #max_freq=(total_iters-i)*start_freq/total_iters+i*end_freq/total_iters, 
+                                    #min_influence=1./500.,
+                                    #num_waves = n_waves,
+                                    #num_gaussians = n_gaussians,
+                                    num_primitives=primitives_per_update
                                     )
                 if(n_waves > 0):
                     writer.add_scalar("Max LS power", 
@@ -159,8 +161,9 @@ if __name__ == '__main__':
                 p = 20*np.log10(1.0) - 10*torch.log10(losses['mse'])
                 writer.add_scalar("Train PSNR", p, i)        
                 t.set_description(f"[{i+1}/{total_iters}] PSNR: {p.item():0.04f}")
-                writer.add_scalar("Num gaussians", model.get_num_gaussians(), i)     
-                writer.add_scalar("Num waves", model.get_num_waves(), i)     
+                #writer.add_scalar("Num gaussians", model.get_num_gaussians(), i)     
+                #writer.add_scalar("Num waves", model.get_num_waves(), i)      
+                writer.add_scalar("Num primitives", model.get_num_primitives(), i)     
     #print(p.key_averages().table(
     #    sort_by="self_cuda_time_total", row_limit=-1))
     

@@ -3,7 +3,7 @@ import torch
 from torch.nn.parameter import Parameter
 import time
 from models.LombScargle2D import LombScargle2D
-from models.GaussianLombScargle import GaussianLombScargleModel
+#from models.GaussianLombScargle import GaussianLombScargleModel
 from tqdm import tqdm
 from utils.data_utils import to_img
 import imageio.v3 as imageio
