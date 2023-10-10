@@ -78,11 +78,11 @@ class PeriodicPrimitives2D(torch.nn.Module):
     
     def create_optimizer(self):
         l = [
-            {'params': [self.gaussian_colors], 'lr': 0.01, "name": "gaussian_colors"},
-            {'params': [self.gaussian_positions], 'lr': 0.01, "name": "gaussian_positions"},
-            {'params': [self.gaussian_scales], 'lr': 0.01, "name": "gaussian_scales"},
-            {'params': [self.gaussian_rotations], 'lr': 0.1, "name": "gaussian_rotations"},
-            {'params': [self.wave_coefficients], 'lr': 0.01, "name": "wave_coefficients"},
+            {'params': [self.gaussian_colors], 'lr': 0.005, "name": "gaussian_colors"},
+            {'params': [self.gaussian_positions], 'lr': 0.005, "name": "gaussian_positions"},
+            {'params': [self.gaussian_scales], 'lr': 0.005, "name": "gaussian_scales"},
+            {'params': [self.gaussian_rotations], 'lr': 0.005, "name": "gaussian_rotations"},
+            {'params': [self.wave_coefficients], 'lr': 0.005, "name": "wave_coefficients"},
         ]
         optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         return optimizer
@@ -97,7 +97,7 @@ class PeriodicPrimitives2D(torch.nn.Module):
         return total
     
     def add_primitives_random(self, num_gaussians):
-        new_colors = 0.1*(torch.randn([num_gaussians, self.n_channels], 
+        new_colors = 0.05*(torch.randn([num_gaussians, self.n_channels], 
                 dtype=torch.float32, device=self.device))
         new_positions = torch.rand([num_gaussians, self.num_dimensions], 
                 dtype=torch.float32, device=self.device)
@@ -105,7 +105,7 @@ class PeriodicPrimitives2D(torch.nn.Module):
                 dtype=torch.float32,  device=self.device)
         new_rotations = torch.pi*torch.rand([num_gaussians, 1],
                 dtype=torch.float32,  device=self.device)
-        new_wave_coefficients = 0.05*torch.randn([num_gaussians, self.n_frequencies, self.num_dimensions],
+        new_wave_coefficients = 0.1*torch.randn([num_gaussians, self.n_frequencies, self.num_dimensions],
                 dtype=torch.float32,  device=self.device)
         new_wave_coefficients[:,0,:] += 1.0
 

@@ -19,8 +19,8 @@ if __name__ == '__main__':
     
     total_iters = 30000
     fine_tune_iters = 5000    
-    total_primitives = 2500
-    primitives_per_update = 100
+    total_primitives = 10000
+    primitives_per_update = 250
     iters_per_primitive = int((total_iters-fine_tune_iters) / (total_primitives/primitives_per_update))
     start_freq = 20
     end_freq = 512
