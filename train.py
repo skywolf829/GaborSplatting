@@ -38,18 +38,14 @@ def log_imgs(writer, model, g, i):
        
 if __name__ == '__main__':
     
-    total_iters = 10000
-    fine_tune_iters = 1000  
-    starting_primitives = 100
-    total_primitives = 1000
-    primitives_per_update = 50
-    iters_per_primitive = int((total_iters-fine_tune_iters) / (total_primitives/primitives_per_update))
+    total_iters = 30000
+    fine_tune_iters = 5000  
+    starting_primitives = 10000
+    total_primitives = 10000
     start_freq = 20
     end_freq = 512
-
-
+    split_every = 500
     prune_every = 100
-    split_every = 250
 
     model_type = PeriodicPrimitives2D
     img_name = "truck.jpg"
@@ -61,7 +57,7 @@ if __name__ == '__main__':
     img_shape = list(training_img.shape)[0:2]
     training_img_copy = (training_img.copy() * 255).astype(np.uint8)
     og_img_shape = training_img.shape
-    model = model_type(device=device, n_channels=3, gaussian_only=True)
+    model = model_type(device=device, n_channels=3, gaussian_only=False)
     n_extracted_peaks = model.add_primitives(starting_primitives)
 
     g_x = torch.arange(0, og_img_shape[0], dtype=torch.float32, device=device) / (og_img_shape[0]-1)
@@ -94,18 +90,20 @@ if __name__ == '__main__':
                 model.prune_primitives(1./500.)
 
         # split primitives
-        if i % split_every == 0 and i < total_iters-fine_tune_iters and split_every != -1:                  
+        if i % split_every == 0 and i < total_iters-fine_tune_iters and split_every != -1 and model.get_num_primitives() < total_primitives:          
+            num_to_go = total_primitives - model.get_num_primitives()
+            iters_to_go = total_iters-fine_tune_iters - i
+            splits_left = int(iters_to_go/split_every)
+            num_to_add = num_to_go/splits_left 
             if(model.get_num_primitives() > 0):
-                log_imgs(writer, model, g, i)
                 losses, model_out = model.loss(x[mask], y[mask])
                 losses['final_loss'].backward()
                 p = model.gaussian_positions.grad.detach().clone()
                 s = model.gaussian_rotations.grad.detach().clone()
                 r = model.gaussian_rotations.grad.detach().clone()
                 with torch.no_grad():
-                    model.split_prims(p, s, r, primitives_per_update)
+                    model.split_prims(p, s, r, num_to_add)
                 model.zero_grad()
-                log_imgs(writer, model, g, i+1)
             else:
                 with torch.no_grad():
                     n_extracted_peaks = model.add_primitives(starting_primitives)
@@ -117,13 +115,13 @@ if __name__ == '__main__':
         model.optimizer.step()
             
         # logging
-        if i % 20 == 0:
+        if i % 10 == 0:
             p = log_scalars(writer, model, losses, i)
             t.set_description(f"[{i+1}/{total_iters}] PSNR: {p:0.04f}")
             
         # image logging
-        #if i % 20 == 0 and i > 0:
-            #log_imgs(writer, model, g, i)
+        if i % 250 == 0 and i > 0:
+            log_imgs(writer, model, g, i)
                 
 
     with torch.no_grad():

@@ -140,9 +140,9 @@ class PeriodicPrimitives2D(torch.nn.Module):
     def param_count(self):
         total = 0
         for group in self.optimizer.param_groups:    
-            if(group['name'] == 'wave_coefficients'):
-                total += self.gaussian_colors.shape[0]*(self.num_top_freqs + self.num_random_freqs)*2
-            else:       
+            if(group['name'] == 'wave_coefficients' and not self.gaussian_only):
+                total += self.gaussian_colors.shape[0]*(self.num_top_freqs + self.num_random_freqs)*self.gaussian_positions.shape[1]
+            elif(group['name'] != 'wave_coefficients'):   
                 total += group['params'][0].numel()
         return total
     
@@ -206,7 +206,7 @@ class PeriodicPrimitives2D(torch.nn.Module):
         return optimizable_tensors
     
     def split_prims(self, grads_pos, grads_scales, grads_rotations, num_primitives):
-        summed_grads = grads_pos.abs().norm(dim=1)# + grads_scales.abs().sum(dim=1) + grads_rotations.abs().sum(dim=1) 
+        summed_grads = grads_pos.abs().norm(dim=1) + grads_scales.abs().sum(dim=1) + grads_rotations.abs().sum(dim=1) 
         
         _, indices = torch.topk(summed_grads, num_primitives)
 
