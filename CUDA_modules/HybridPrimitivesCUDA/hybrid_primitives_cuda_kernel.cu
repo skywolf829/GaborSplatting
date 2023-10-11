@@ -215,30 +215,28 @@ namespace{
                     const float g_y = (x - mx) * cov01 + 
                             (y - my) * cov11;
                     const float g = expf(-(g_x * g_x + g_y * g_y) / 2.0f);
-                    if(g<0.0000001f) continue; 
                     for (k = 0; k < num_channels; k++){ 
-                        if(abs(dRGB[k]) < 0.00000001f) continue;
 
                         // Gaussian color gradient update
-                        grad_gaussian_colors[j][k] += dRGB[k]*g; 
+                        atomicAdd(&grad_gaussian_colors[j][k],dRGB[k]*g); 
 
                         // Gaussian position gradient update
-                        grad_gaussian_means[j][0] += 
+                        atomicAdd(&grad_gaussian_means[j][0], 
                             dRGB[k]*g*RGB[k]*
-                            (g_x*cov00+g_y*cov01);
-                        grad_gaussian_means[j][1] += 
+                            (g_x*cov00+g_y*cov01));
+                        atomicAdd(&grad_gaussian_means[j][1], 
                             dRGB[k]*g*RGB[k]*
-                            (g_x*cov10+g_y*cov11);
+                            (g_x*cov10+g_y*cov11));
                             
                         // Gaussian covariance matrix update
-                        grad_gaussian_mats[j][0][0] +=
-                            dRGB[k]*g*RGB[k]*g_x*-(x - mx);
-                        grad_gaussian_mats[j][0][1] +=
-                            dRGB[k]*g*RGB[k]*g_y*-(x - mx);
-                        grad_gaussian_mats[j][1][0] +=
-                            dRGB[k]*g*RGB[k]*g_x*-(y - my);
-                        grad_gaussian_mats[j][1][1] +=
-                            dRGB[k]*g*RGB[k]*g_y*-(y - my);
+                        atomicAdd(&grad_gaussian_mats[j][0][0],
+                            dRGB[k]*g*RGB[k]*g_x*-(x - mx));
+                        atomicAdd(&grad_gaussian_mats[j][0][1],
+                            dRGB[k]*g*RGB[k]*g_y*-(x - mx));
+                        atomicAdd(&grad_gaussian_mats[j][1][0],
+                            dRGB[k]*g*RGB[k]*g_x*-(y - my));
+                        atomicAdd(&grad_gaussian_mats[j][1][1],
+                            dRGB[k]*g*RGB[k]*g_y*-(y - my));
                     
                 }
             }

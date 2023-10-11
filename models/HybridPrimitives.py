@@ -98,8 +98,8 @@ class HybridPrimitives(torch.nn.Module):
         new_means = torch.rand([num_gaussians, self.num_dimensions], 
                 dtype=torch.float32, device=self.device)
         new_mats = torch.eye(self.num_dimensions, device=self.device, 
-                dtype=torch.float32)[None,...].repeat(num_gaussians, 1, 1) * 100
-        new_mats += torch.randn_like(new_mats)*5
+                dtype=torch.float32)[None,...].repeat(num_gaussians, 1, 1) * 50.0
+        new_mats += torch.randn_like(new_mats)*1
 
         tensor_dict = {
             "gaussian_colors": new_colors, 

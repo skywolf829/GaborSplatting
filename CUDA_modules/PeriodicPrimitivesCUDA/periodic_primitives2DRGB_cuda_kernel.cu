@@ -36,7 +36,6 @@ __device__ float2 operator-=(float2 &a, const float2 &b) {
     a.y -= b.y;
 }
 
-
 __device__ __forceinline__ bool get256bitOffset(const uint32_t bits[8], const int bitNo){
     int i = bitNo / 32;
     int shift = bitNo % 32;
@@ -136,6 +135,7 @@ namespace{
         int BATCH_SIZE,   
         int NUM_FREQUENCIES,   
         float MAX_FREQUENCY,
+        const bool gaussian_only,
         const float* __restrict__ input,
         const float* __restrict__ colors,
         const float* __restrict__ positions,
@@ -169,7 +169,7 @@ namespace{
             RGB[3*threadIdx.x] = colors[3*j];
             RGB[3*threadIdx.x+1] = colors[3*j+1];
             RGB[3*threadIdx.x+2] = colors[3*j+2];
-            for (int idx = 0; idx < NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES; idx++){
+            for (int idx = 0; idx < NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES && !gaussian_only; idx++){
                 c[threadIdx.x*NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES+idx] =
                     wave_coefficients[j*NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES + idx];
                 c_idx[threadIdx.x*NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES+idx] =
@@ -196,19 +196,18 @@ namespace{
             float sinr = sinf(rotation);
             float2 tx = { scale.x*(dx.x*cosr  + dx.y*sinr),
                         scale.y*(dx.x*-sinr + dx.y*cosr) };
-            float g = expf(-(tx.x*tx.x + tx.y*tx.y)/2);
+            float g = expf(-0.5*(tx.x*tx.x + tx.y*tx.y));
             
             float wx = 0.0f, wy = 0.0f;
-            for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES; w_idx++){
+            for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES && !gaussian_only; w_idx++){
                 int spot = idx*SELECTED_NUM_FREQUENCIES*NUM_DIMENSIONS + w_idx*NUM_DIMENSIONS;
                 float fx = MAX_FREQUENCY*c_idx[spot]/(float)TOTAL_NUM_FREQUENCIES;
                 float fy = MAX_FREQUENCY*c_idx[spot+1]/(float)TOTAL_NUM_FREQUENCIES;
-                
                 wx += c[spot]*cosf(fx*x.x);
                 wy += c[spot+1]*cosf(fy*x.y);
             }            
-            
-            temp_result += g*wx*wy*color;
+            if(!gaussian_only) g *= wx*wy;
+            temp_result += g*color;
         }
         
         atomicAdd(&output[i*3], temp_result.x);
@@ -216,17 +215,98 @@ namespace{
         atomicAdd(&output[i*3+2], temp_result.z);
     }
 
-    __global__ void preprocess_gaussians(  
+    __global__ void periodic_primitives_heatmap_cuda_kernel(  
+        int NUM_PRIMITIVES,
+        int BATCH_SIZE,   
+        int NUM_FREQUENCIES,   
+        float MAX_FREQUENCY,
+        const bool gaussian_only,
+        const float* __restrict__ input,
+        const float* __restrict__ positions,
+        const float* __restrict__ scales,
+        const float* __restrict__ rotations,
+        const float* __restrict__ wave_coefficients,
+        const int* __restrict__ wave_coefficient_indices,
+        float* __restrict__ output
+        ) {
+
+        // Get block/thread related numbers   
+        const int i = blockIdx.x * blockDim.x + threadIdx.x;
+        const int num_to_process = min(NUM_THREADS, NUM_PRIMITIVES - blockIdx.y * blockDim.x);
+        const int j = blockIdx.y * blockDim.x + threadIdx.x ;
+
+
+        // Declare shared floats
+        __shared__ float p[NUM_THREADS*2];
+        __shared__ float s[NUM_THREADS*2];
+        __shared__ float r[NUM_THREADS];
+        __shared__ float c[NUM_THREADS*NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES];
+        __shared__ int c_idx[NUM_THREADS*NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES];
+        
+        if(j < NUM_PRIMITIVES){
+            p[2*threadIdx.x] = positions[2*j];
+            p[2*threadIdx.x+1] = positions[2*j+1];
+            s[2*threadIdx.x] = scales[2*j];
+            s[2*threadIdx.x+1] = scales[2*j+1];
+            r[threadIdx.x] = rotations[j];
+            for (int idx = 0; idx < NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES && !gaussian_only; idx++){
+                c[threadIdx.x*NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES+idx] =
+                    wave_coefficients[j*NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES + idx];
+                c_idx[threadIdx.x*NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES+idx] =
+                    wave_coefficient_indices[j*NUM_DIMENSIONS*SELECTED_NUM_FREQUENCIES + idx];
+            }
+        }
+    
+        __syncthreads();
+        if(i >= BATCH_SIZE) return;
+
+        float2 x = {input[2*i], input[2*i+1]};
+        float temp_result = 0.0f;
+        
+
+        for(int idx = 0; idx < num_to_process; idx++){
+            // Get some necessary shared data first
+            float2 pos = {p[2*idx], p[2*idx+1] };
+            float2 scale = { s[2*idx], s[2*idx+1]};
+            float2 dx = x - pos;
+
+            float rotation = r[idx];
+            float cosr = cosf(rotation);
+            float sinr = sinf(rotation);
+            float2 tx = { scale.x*(dx.x*cosr  + dx.y*sinr),
+                        scale.y*(dx.x*-sinr + dx.y*cosr) };
+            float g = expf(-(tx.x*tx.x + tx.y*tx.y)/2);
+            
+            float wx = 0.0f, wy = 0.0f;
+            for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES && !gaussian_only; w_idx++){
+                int spot = idx*SELECTED_NUM_FREQUENCIES*NUM_DIMENSIONS + w_idx*NUM_DIMENSIONS;
+                float fx = MAX_FREQUENCY*c_idx[spot]/(float)TOTAL_NUM_FREQUENCIES;
+                float fy = MAX_FREQUENCY*c_idx[spot+1]/(float)TOTAL_NUM_FREQUENCIES;
+                
+                wx += c[spot]*cosf(fx*x.x);
+                wy += c[spot+1]*cosf(fy*x.y);
+            }            
+            if(!gaussian_only) g *= fabsf(wx*wy);            
+            temp_result += g;
+        }
+        
+        atomicAdd(&output[i], temp_result);
+    }
+
+    __global__ void preprocess_gaussians_step1(  
         int NUM_PRIMITIVES,
         float min_x, float min_y, 
         float range_x, float range_y,
         const float* __restrict__ positions,
         const float* __restrict__ scales,
+        uint32_t gaussians_per_block[BLOCKS_X][BLOCKS_Y],
         uint32_t* __restrict__ gaussian_blocks
         ) {
             // Get block/thread related numbers   
             const int index = blockIdx.x * blockDim.x + threadIdx.x;
             const int stride = blockDim.x * gridDim.x;
+
+            __shared__ uint32_t local_gaussians_per_block[BLOCKS_X][BLOCKS_Y];
 
             for(int i = index; i < NUM_PRIMITIVES; i += stride){
                 uint32_t block_values[8] = {(uint32_t)0,(uint32_t)0,(uint32_t)0,(uint32_t)0,
@@ -247,6 +327,7 @@ namespace{
                 if(y_block_max >= BLOCKS_Y) y_block_max = BLOCKS_Y-1;
                 for (int x = x_block_min; x <= x_block_max; x++){
                     for (int y = y_block_min; y <= y_block_max; y++){
+                        atomicAdd(&local_gaussians_per_block[x][y], 1);
                         set256bitOffset(block_values, y*BLOCKS_X+x);
                     }
                 }
@@ -258,6 +339,14 @@ namespace{
                 gaussian_blocks[8*i+5] = block_values[5];
                 gaussian_blocks[8*i+6] = block_values[6];
                 gaussian_blocks[8*i+7] = block_values[7];
+            }
+
+            if(threadIdx.x == 0){
+                for (int x = 0; x < BLOCKS_X; x++){
+                    for (int y = 0; y < BLOCKS_Y; y++){
+                        atomicAdd(&gaussians_per_block[x][y], local_gaussians_per_block[x][y]);
+                    }
+                }
             }
         }
 
@@ -328,7 +417,8 @@ namespace{
     __global__ void periodic_primitives_backward_cuda_kernel(
         const int NUM_PRIMITIVES,
         const int BATCH_SIZE, 
-        const float MAX_FREQUENCY, 
+        const float MAX_FREQUENCY,
+        const bool gaussian_only,
         const float* __restrict__ grad_output,
         const float* __restrict__ input,
         const float* __restrict__ colors,
@@ -341,8 +431,7 @@ namespace{
         float* __restrict__ dPositions,
         float* __restrict__ dScales,
         float* __restrict__ dRotations,
-        //float* __restrict__ dCoefficients
-        torch::PackedTensorAccessor32<float,3,torch::RestrictPtrTraits> dCoefficients
+        float* __restrict__ dCoefficients
         ) 
     {
         // Get block/thread related numbers   
@@ -357,13 +446,15 @@ namespace{
             float2 scale = { scales[2*j], scales[2*j+1]};
             float coeffs[SELECTED_NUM_FREQUENCIES][2];
             int coeff_idx[SELECTED_NUM_FREQUENCIES][2];
-            for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES; w_idx++){
-                int spot = j*SELECTED_NUM_FREQUENCIES*NUM_DIMENSIONS + w_idx*NUM_DIMENSIONS;
-                coeffs[w_idx][0] = wave_coefficients[spot];
-                coeffs[w_idx][1] = wave_coefficients[spot+1];
-                coeff_idx[w_idx][0] = wave_coefficient_indices[spot];
-                coeff_idx[w_idx][1] = wave_coefficient_indices[spot+1];
-            }    
+            if(!gaussian_only){
+                for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES; w_idx++){
+                    int spot = j*SELECTED_NUM_FREQUENCIES*NUM_DIMENSIONS + w_idx*NUM_DIMENSIONS;
+                    coeffs[w_idx][0] = wave_coefficients[spot];
+                    coeffs[w_idx][1] = wave_coefficients[spot+1];
+                    coeff_idx[w_idx][0] = wave_coefficient_indices[spot];
+                    coeff_idx[w_idx][1] = wave_coefficient_indices[spot+1];
+                } 
+            }   
 
             float cosr = cosf(rotation);
             float sinr = sinf(rotation);
@@ -386,18 +477,18 @@ namespace{
                 float g = expf(-(tx.x*tx.x + tx.y*tx.y)/2);
 
                 float wx = 0.0f, wy = 0.0f;
-                float temp_cos[SELECTED_NUM_FREQUENCIES][2];
-                for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES; w_idx++){
-                    float fx = MAX_FREQUENCY*coeff_idx[w_idx][0]/(float)TOTAL_NUM_FREQUENCIES;
-                    float fy = MAX_FREQUENCY*coeff_idx[w_idx][1]/(float)TOTAL_NUM_FREQUENCIES;
-                    float cos_rx = cosf(fx*x.x);
-                    float cos_ry = cosf(fy*x.y);
-                    wx += coeffs[w_idx][0]*cos_rx;
-                    wy += coeffs[w_idx][1]*cos_ry;
-                    temp_cos[w_idx][0] = cos_rx;
-                    temp_cos[w_idx][1] = cos_ry;
-                }            
-
+                if(!gaussian_only){
+                    for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES; w_idx++){
+                        float fx = MAX_FREQUENCY*coeff_idx[w_idx][0]/(float)TOTAL_NUM_FREQUENCIES;
+                        float fy = MAX_FREQUENCY*coeff_idx[w_idx][1]/(float)TOTAL_NUM_FREQUENCIES;
+                        wx += coeffs[w_idx][0]*cosf(fx*x.x);
+                        wy += coeffs[w_idx][1]*cosf(fy*x.y);
+                    }            
+                }
+                else{
+                    wx = 1.0;
+                    wy = 1.0;
+                }
                 float color_contribution = dRGB.x*color.x+dRGB.y*color.y+dRGB.z*color.z;
                 float shared_coeff = color_contribution*g*wx*wy;
                 
@@ -409,11 +500,16 @@ namespace{
                 dRotation_temp += shared_coeff*-(tx.x*(scale.x*dx.x*-sinr+scale.x*dx.y*cosr) 
                                                 + tx.y*(scale.y*dx.x*-cosr + scale.y*dx.y*-sinr)); 
                                                 
-
-                for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES; w_idx++){
-                    dCoefficients_temp[w_idx][0] += color_contribution*g*wy*temp_cos[w_idx][0];
-                    dCoefficients_temp[w_idx][1] += color_contribution*g*wx*temp_cos[w_idx][1];
-                }  
+                if(!gaussian_only){
+                    for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES; w_idx++){
+                        float fx = MAX_FREQUENCY*coeff_idx[w_idx][0]/(float)TOTAL_NUM_FREQUENCIES;
+                        float fy = MAX_FREQUENCY*coeff_idx[w_idx][1]/(float)TOTAL_NUM_FREQUENCIES;
+                        dCoefficients_temp[w_idx][0] += color_contribution*g*wy*cosf(fx*x.x);
+                        dCoefficients_temp[w_idx][1] += color_contribution*g*wx*cosf(fy*x.y);
+                        //dPosition_temp.x += color_contribution*g*wy*coeffs[w_idx][0]*fx*sinf(fx*dx.x);
+                        //dPosition_temp.y += color_contribution*g*wx*coeffs[w_idx][1]*fy*sinf(fy*dx.y);
+                    }  
+                }
             }
             dColors[3*j] = dColor_temp.x;
             dColors[3*j+1] = dColor_temp.y;
@@ -424,14 +520,13 @@ namespace{
             dScales[2*j+1] = dScale_temp.y;
             dRotations[j] = dRotation_temp;
             
-            
-            for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES; w_idx++){
-                dCoefficients[j][w_idx][0] = dCoefficients_temp[w_idx][0];
-                dCoefficients[j][w_idx][1] = dCoefficients_temp[w_idx][1];
+            if(!gaussian_only){
+                for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES; w_idx++){
+                    dCoefficients[j*SELECTED_NUM_FREQUENCIES*2 + 2*w_idx] = dCoefficients_temp[w_idx][0];
+                    dCoefficients[j*SELECTED_NUM_FREQUENCIES*2 + 2*w_idx + 1] = dCoefficients_temp[w_idx][1];
+                }
             }
-            
         }
-
     }
 }
 
@@ -443,7 +538,8 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     torch::Tensor rotations,                    // [M, 1]
     torch::Tensor wave_coefficients,            // [M, n_freqs, n_dim]
     torch::Tensor wave_coefficient_indices,    // [M, n_freqs, n_dim]
-    const float MAX_FREQUENCY
+    const float MAX_FREQUENCY,    
+    const bool gaussian_only
     ) {
 
     // Get sizes for the output
@@ -470,13 +566,16 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     /*
     float range_x = max_x - min_x + 0.0000001f;
     float range_y = max_y - min_y + 0.0000001f;
-    preprocess_gaussians<<<(num_primitives+NUM_THREADS-1)/NUM_THREADS,NUM_THREADS>>>(  
+    uint32_t gaussians_per_block[BLOCKS_X][BLOCKS_Y];
+    preprocess_gaussians_step1<<<(num_primitives+NUM_THREADS-1)/NUM_THREADS,NUM_THREADS>>>(  
         num_primitives,
         min_x, min_y,
         range_x, range_y,
         positions.contiguous().data_ptr<float>(),
         scales.contiguous().data_ptr<float>(),
+        gaussians_per_block,
         gaussian_blocks
+        
         );*/
 
     // Now parallelize over query points
@@ -487,8 +586,55 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
         batch_size,
         num_frequencies,
         MAX_FREQUENCY,
+        gaussian_only,
         input.contiguous().data_ptr<float>(),
         colors.contiguous().data_ptr<float>(),
+        positions.contiguous().data_ptr<float>(),
+        scales.contiguous().data_ptr<float>(),
+        rotations.contiguous().data_ptr<float>(),
+        wave_coefficients.contiguous().data_ptr<float>(),
+        wave_coefficient_indices.contiguous().data_ptr<int>(),
+        output.contiguous().data_ptr<float>()
+        );
+        
+    return {output};
+}
+
+std::vector<torch::Tensor> periodic_primitives_heatmap_cuda(
+    torch::Tensor input,                        // [N, n_dim]
+    torch::Tensor positions,                    // [M, n_dim]
+    torch::Tensor scales,                       // [M, n_dim]
+    torch::Tensor rotations,                    // [M, 1]
+    torch::Tensor wave_coefficients,            // [M, n_freqs, n_dim]
+    torch::Tensor wave_coefficient_indices,    // [M, n_freqs, n_dim]
+    const float MAX_FREQUENCY,
+    const bool gaussian_only
+    ) {
+
+    // Get sizes for the output
+    const int batch_size = input.size(0);
+    const int num_primitives = scales.size(0);
+    const int num_frequencies = wave_coefficients.size(2);
+
+    // Create output tensor and other tensors
+    auto output = torch::zeros({batch_size}, input.device());
+        
+    // If we want to adjust the number of blocks, this is a good way
+    // Scales with the number of SMs on the GPU
+    int numSMs;
+    cudaDeviceGetAttribute(&numSMs, cudaDevAttrMultiProcessorCount, 0);
+    
+
+    // Now parallelize over query points
+    dim3 numBlocks ((batch_size+NUM_THREADS-1)/NUM_THREADS, (num_primitives+NUM_THREADS-1)/NUM_THREADS);
+    //dim3 numBlocks(BLOCKS_X, BLOCKS_Y);
+    periodic_primitives_heatmap_cuda_kernel<<<numBlocks, NUM_THREADS>>>(
+        num_primitives,
+        batch_size,
+        num_frequencies,
+        MAX_FREQUENCY,
+        gaussian_only,
+        input.contiguous().data_ptr<float>(),
         positions.contiguous().data_ptr<float>(),
         scales.contiguous().data_ptr<float>(),
         rotations.contiguous().data_ptr<float>(),
@@ -510,7 +656,8 @@ std::vector<torch::Tensor> periodic_primitives_backward_cuda(
     torch::Tensor rotations,                    // [M, n_dim, n_freqs]
     torch::Tensor wave_coefficients,            // [M, n_dim, n_freqs]
     torch::Tensor wave_coefficient_indices,     // [M, n_dim, n_freqs]
-    const float MAX_FREQUENCY
+    const float MAX_FREQUENCY,
+    const bool gaussian_only
     ) {
         // Get sizes for the output
         const int batch_size = input.size(0);
@@ -532,6 +679,7 @@ std::vector<torch::Tensor> periodic_primitives_backward_cuda(
             num_primitives,
             batch_size,
             MAX_FREQUENCY,
+            gaussian_only,
             grad_output.contiguous().data_ptr<float>(),
             input.contiguous().data_ptr<float>(),
             colors.contiguous().data_ptr<float>(),
@@ -544,8 +692,7 @@ std::vector<torch::Tensor> periodic_primitives_backward_cuda(
             dPositions.contiguous().data_ptr<float>(),
             dScales.contiguous().data_ptr<float>(),
             dRotations.contiguous().data_ptr<float>(),
-            //dCoefficients.contiguous().data_ptr<float>()
-            dCoefficients.packed_accessor32<float,3,torch::RestrictPtrTraits>()
+            dCoefficients.contiguous().data_ptr<float>()
             );
     
         return {dColors, dPositions, dScales, dRotations, dCoefficients };

@@ -4,8 +4,9 @@
 #
 
 import torch
-print("Loading HybridPrimitives CUDA kernel. May need to compile...")
+print("Loading CUDA kernels. May need to compile...")
 from models.PeriodicPrimitives2D import PeriodicPrimitives2D
+print("Successfully loaded PeriodicPrimitives2D.")
 from models.HybridPrimitives import HybridPrimitives
 print("Successfully loaded HybridPrimitives.")
 from time import time
@@ -19,16 +20,16 @@ torch.backends.cudnn.allow_tf32 = True
 torch.manual_seed(7)
 
 test_iters = 10
-num_gaussians = 100000
+num_gaussians = 1
 num_waves = 0
-num_points = 100000
+num_points = 1
 num_dimensions = 2
 
-hp = PeriodicPrimitives2D()
+hp = PeriodicPrimitives2D(gaussian_only=True)
 hp.add_primitives_random(num_gaussians)
 
 #hp = HybridPrimitives()
-#hp.add_random_waves(num_gaussians)
+#hp.add_random_gaussians(num_gaussians)
 
 x = torch.rand([num_points, num_dimensions], device="cuda", dtype=torch.float32)
 
@@ -216,24 +217,26 @@ def backward_error_test():
         print("Memory error - PyTorch exceeded the maximum GPU memory. Ending test.")
         return
 
-    torch.set_printoptions(threshold=10_000)
+    torch.set_printoptions(threshold=10)
     (out_pytorch.abs()).mean().backward()
     groups_pytorch = []
     for group in hp.optimizer.param_groups:
-        grads = group['params'][0].grad.clone().detach()
-        #print(grads)
-        groups_pytorch.append(grads)
+        if(group["params"][0].numel() > 0 and group["params"][0].grad is not None):
+            grads = group['params'][0].grad.clone().detach()
+            print(grads)
+            groups_pytorch.append(grads)
 
     hp.zero_grad()
     hp.optimizer.zero_grad()
-
+    
     out_cuda = hp.forward(x)
     (out_cuda.abs()).mean().backward()
     groups_cuda = []
     for group in hp.optimizer.param_groups:
-        grads = group['params'][0].grad.clone().detach()
-        #print(grads)
-        groups_cuda.append(grads)
+        if(group["params"][0].numel() > 0 and group["params"][0].grad is not None):
+            grads = group['params'][0].grad.clone().detach()
+            print(grads)
+            groups_cuda.append(grads)
 
     assert len(groups_cuda) == len(groups_pytorch), "Parameter groups do not match between PyTorch and CUDA"
     err = 0
@@ -250,17 +253,18 @@ def backward_error_test():
 def profiler_test():
     with profile(activities=[
         ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, with_stack=True) as prof:
-        hp.forward(x)
-    print(prof.key_averages(group_by_input_shape=True).table(sort_by="self_cuda_time_total", row_limit=20))
+        y = hp.forward(x)
+        torch.abs(y).mean().backward()
+    print(prof.key_averages(group_by_input_shape=True).table(sort_by="self_cuda_time_total", row_limit=5))
 
 
-#forward_error_test()
-#backward_error_test()
+forward_error_test()
+backward_error_test()
 
 #forward_memory_test()
 #backward_memory_test()
 
 forward_timing_test()
 #inference_timing_test()
-backward_timing_test()
-profiler_test()
+#backward_timing_test()
+#profiler_test()

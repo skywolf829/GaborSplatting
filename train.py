@@ -14,13 +14,14 @@ from utils.data_utils import to_img, psnr
 import time
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
+import os
 
 if __name__ == '__main__':
     
     total_iters = 30000
     fine_tune_iters = 5000    
     total_primitives = 10000
-    primitives_per_update = 250
+    primitives_per_update = 10000
     iters_per_primitive = int((total_iters-fine_tune_iters) / (total_primitives/primitives_per_update))
     start_freq = 20
     end_freq = 512
@@ -32,9 +33,10 @@ if __name__ == '__main__':
     torch.random.manual_seed(42)
     np.random.seed(42)
     training_img = load_img("./data/"+img_name)
+    img_shape = list(training_img.shape)[0:2]
     training_img_copy = (training_img.copy() * 255).astype(np.uint8)
     og_img_shape = training_img.shape
-    model = model_type(device=device, n_channels=3)
+    model = model_type(device=device, n_channels=3, gaussian_only=False)
 
     g_x = torch.arange(0, og_img_shape[0], dtype=torch.float32, device=device) / (og_img_shape[0]-1)
     g_y = torch.arange(0, og_img_shape[1], dtype=torch.float32, device=device) / (og_img_shape[1]-1)
@@ -77,15 +79,18 @@ if __name__ == '__main__':
 
     max_ls_points = 2**17
     pct_of_data = max_ls_points / x.shape[0]
-    writer = SummaryWriter(f"./runs/{img_name.split('.')[0]}/{model.__class__.__name__}/{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
+    current_t = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    run_name = model.__class__.__name__+"_"+img_name.split('.')[0]+current_t
+    writer = SummaryWriter(f"./runs/{img_name.split('.')[0]}/{model.__class__.__name__}/{current_t}")
     t = tqdm(range(total_iters))
     for i in t:
+        model.update_learning_rate(i)
         mask = torch.rand(x.shape[0], device=x.device, dtype=torch.float32) < pct_of_data
 
         # image logging
         if i % 200 == 0 and i > 0:
             with torch.no_grad():
-                res = [512, 512]
+                res = img_shape
                 xmin = x.min(dim=0).values
                 xmax = x.max(dim=0).values
                 g = [torch.linspace(xmin[i], xmax[i], res[i], device=model.device) for i in range(xmin.shape[0])]
@@ -93,48 +98,62 @@ if __name__ == '__main__':
                 img = model(g).reshape(res+[model.n_channels])
                 img = to_img(img)
                 writer.add_image('reconstruction', img, i, dataformats='HWC')
+                heatmap = model.vis_heatmap(g).reshape(res)
+                heatmap = to_img(heatmap)[...,None]
+                writer.add_image('heatmap', heatmap, i, dataformats='HWC')
                 
-                #if("Siren" not in model.__class__.__name__):
-                    #wave_img = to_img(model.vis_primitives(x))                
-                    #writer.add_image('primitives', wave_img, i, dataformats='HWC')
 
         # adding primitives
         if i % iters_per_primitive == 0 and i < total_iters-fine_tune_iters and "Siren" not in model.__class__.__name__:
-            with torch.no_grad():   
-                if i > 0: 
+            if i > 0: 
+                with torch.no_grad():
                     writer.add_scalar("Params vs. PSNR", 
-                                      20*np.log10(1.0) - 10*torch.log10(losses['mse']), 
-                                      model.param_count())
-                residuals = y[mask]
-                if(i>0):
-                    residuals -= model(x[mask])
+                                    20*np.log10(1.0) - 10*torch.log10(losses['mse']), 
+                                    model.param_count())
+            #residuals = y[mask]
+            #if(i>0):
+            #    residuals -= model(x[mask])
+            with torch.no_grad():
                 model.prune_primitives(1./500.)
-                n_gaussians = primitives_per_update
-                n_waves = 0
-                #n_gaussians = 0
-                #n_waves = primitives_per_update
-                #n_gaussians = primitives_per_update-n_waves
-                n_extracted_peaks = model.add_primitives(
-                                    #x[mask],
-                                    #residuals,
-                                    #n_freqs = 180, 
-                                    #n_angles = 180,
-                                    #max_freq=(total_iters-i)*start_freq/total_iters+i*end_freq/total_iters, 
-                                    #min_influence=1./500.,
-                                    #num_waves = n_waves,
-                                    #num_gaussians = n_gaussians,
-                                    num_primitives=primitives_per_update
-                                    )
-                if(n_waves > 0):
-                    writer.add_scalar("Max LS power", 
-                                        model.ls_power.max(), 
-                                        i)
-                    writer.add_scalar("Min LS power", 
-                                        model.ls_power.min(), 
-                                        i)
-                
-                if(n_waves > 0):
-                    writer.add_image("Lomb-Scargle", model.ls_plot, i, dataformats="HWC")
+            n_gaussians = primitives_per_update
+            n_waves = 0
+            #n_gaussians = 0
+            #n_waves = primitives_per_update
+            #n_gaussians = primitives_per_update-n_waves
+            #n_extracted_peaks = model.add_primitives(
+                                #x[mask],
+                                #residuals,
+                                #n_freqs = 180, 
+                                #n_angles = 180,
+                                #max_freq=(total_iters-i)*start_freq/total_iters+i*end_freq/total_iters, 
+                                #min_influence=1./500.,
+                                #num_waves = n_waves,
+                                #num_gaussians = n_gaussians,
+            #                    num_primitives=primitives_per_update
+            #                    )
+            if(model.get_num_primitives() > 0):
+                losses, model_out = model.loss(x[mask], y[mask])
+                losses['final_loss'].backward()
+                p = model.gaussian_positions.grad.detach().clone()
+                s = model.gaussian_rotations.grad.detach().clone()
+                r = model.gaussian_rotations.grad.detach().clone()
+                with torch.no_grad():
+                    model.split_prims(p, s, r, primitives_per_update)
+                model.zero_grad()
+            else:
+                with torch.no_grad():
+                    n_extracted_peaks = model.add_primitives(primitives_per_update)
+
+            if(n_waves > 0):
+                writer.add_scalar("Max LS power", 
+                                    model.ls_power.max(), 
+                                    i)
+                writer.add_scalar("Min LS power", 
+                                    model.ls_power.min(), 
+                                    i)
+            
+            if(n_waves > 0):
+                writer.add_image("Lomb-Scargle", model.ls_plot, i, dataformats="HWC")
         
         #if i % iters_per_wave == 0 and i > 0:
             #with torch.no_grad():
@@ -197,4 +216,5 @@ if __name__ == '__main__':
 
     writer.flush()
     writer.close()
+    model.save(os.path.join("./savedModels", run_name+".ckpt"))
     
