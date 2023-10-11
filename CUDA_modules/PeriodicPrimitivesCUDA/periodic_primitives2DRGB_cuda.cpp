@@ -89,6 +89,7 @@ std::vector<torch::Tensor> periodic_primitives_heatmap(
     CHECK_INPUT(scales);
     CHECK_INPUT(rotations);
     CHECK_INPUT(wave_coefficients);
+    CHECK_INPUT(wave_coefficient_indices);
 
     return periodic_primitives_heatmap_cuda(
         input, 

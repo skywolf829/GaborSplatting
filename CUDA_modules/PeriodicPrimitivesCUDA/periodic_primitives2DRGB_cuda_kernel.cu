@@ -3,6 +3,12 @@
 #include <cuda_runtime.h>
 #include <vector>
 #include <stdio.h>
+#include <cub/cub.cuh>
+#include <cub/device/device_radix_sort.cuh>
+
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
+namespace cg = cooperative_groups;
 
 #define NUM_THREADS 128
 #define TOTAL_NUM_FREQUENCIES 1024
@@ -192,19 +198,19 @@ namespace{
 
             float rotation = r[idx];
             float3 color = {RGB[3*idx], RGB[3*idx+1], RGB[3*idx+2]};            
-            float cosr = cosf(rotation);
-            float sinr = sinf(rotation);
+            float cosr = __cosf(rotation);
+            float sinr = __sinf(rotation);
             float2 tx = { scale.x*(dx.x*cosr  + dx.y*sinr),
                         scale.y*(dx.x*-sinr + dx.y*cosr) };
-            float g = expf(-0.5*(tx.x*tx.x + tx.y*tx.y));
+            float g = __expf(-0.5*(tx.x*tx.x + tx.y*tx.y));
             
             float wx = 0.0f, wy = 0.0f;
             for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES && !gaussian_only; w_idx++){
                 int spot = idx*SELECTED_NUM_FREQUENCIES*NUM_DIMENSIONS + w_idx*NUM_DIMENSIONS;
                 float fx = MAX_FREQUENCY*c_idx[spot]/(float)TOTAL_NUM_FREQUENCIES;
                 float fy = MAX_FREQUENCY*c_idx[spot+1]/(float)TOTAL_NUM_FREQUENCIES;
-                wx += c[spot]*cosf(fx*x.x);
-                wy += c[spot+1]*cosf(fy*x.y);
+                wx += c[spot]*__cosf(fx*x.x);
+                wy += c[spot+1]*__cosf(fy*x.y);
             }            
             if(!gaussian_only) g *= wx*wy;
             temp_result += g*color;
@@ -269,13 +275,12 @@ namespace{
             float2 pos = {p[2*idx], p[2*idx+1] };
             float2 scale = { s[2*idx], s[2*idx+1]};
             float2 dx = x - pos;
-
             float rotation = r[idx];
-            float cosr = cosf(rotation);
-            float sinr = sinf(rotation);
+            float cosr = __cosf(rotation);
+            float sinr = __sinf(rotation);
             float2 tx = { scale.x*(dx.x*cosr  + dx.y*sinr),
                         scale.y*(dx.x*-sinr + dx.y*cosr) };
-            float g = expf(-(tx.x*tx.x + tx.y*tx.y)/2);
+            float g = __expf(-0.5*(tx.x*tx.x + tx.y*tx.y));
             
             float wx = 0.0f, wy = 0.0f;
             for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES && !gaussian_only; w_idx++){
@@ -283,8 +288,8 @@ namespace{
                 float fx = MAX_FREQUENCY*c_idx[spot]/(float)TOTAL_NUM_FREQUENCIES;
                 float fy = MAX_FREQUENCY*c_idx[spot+1]/(float)TOTAL_NUM_FREQUENCIES;
                 
-                wx += c[spot]*cosf(fx*x.x);
-                wy += c[spot+1]*cosf(fy*x.y);
+                wx += c[spot]*__cosf(fx*x.x);
+                wy += c[spot+1]*__cosf(fy*x.y);
             }            
             if(!gaussian_only) g *= fabsf(wx*wy);            
             temp_result += g;
@@ -456,8 +461,8 @@ namespace{
                 } 
             }   
 
-            float cosr = cosf(rotation);
-            float sinr = sinf(rotation);
+            float cosr = __cosf(rotation);
+            float sinr = __sinf(rotation);
             
             // Use local memory for temp updates instead of global
             float3 dColor_temp = {0.0f, 0.0f, 0.0f};
@@ -474,15 +479,15 @@ namespace{
 
                 float2 tx = { scale.x*(dx.x*cosr  + dx.y*sinr),
                             scale.y*(dx.x*-sinr + dx.y*cosr) };
-                float g = expf(-(tx.x*tx.x + tx.y*tx.y)/2);
+                float g = __expf(-(tx.x*tx.x + tx.y*tx.y)/2);
 
                 float wx = 0.0f, wy = 0.0f;
                 if(!gaussian_only){
                     for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES; w_idx++){
                         float fx = MAX_FREQUENCY*coeff_idx[w_idx][0]/(float)TOTAL_NUM_FREQUENCIES;
                         float fy = MAX_FREQUENCY*coeff_idx[w_idx][1]/(float)TOTAL_NUM_FREQUENCIES;
-                        wx += coeffs[w_idx][0]*cosf(fx*x.x);
-                        wy += coeffs[w_idx][1]*cosf(fy*x.y);
+                        wx += coeffs[w_idx][0]*__cosf(fx*x.x);
+                        wy += coeffs[w_idx][1]*__cosf(fy*x.y);
                     }            
                 }
                 else{
@@ -504,8 +509,8 @@ namespace{
                     for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES; w_idx++){
                         float fx = MAX_FREQUENCY*coeff_idx[w_idx][0]/(float)TOTAL_NUM_FREQUENCIES;
                         float fy = MAX_FREQUENCY*coeff_idx[w_idx][1]/(float)TOTAL_NUM_FREQUENCIES;
-                        dCoefficients_temp[w_idx][0] += color_contribution*g*wy*cosf(fx*x.x);
-                        dCoefficients_temp[w_idx][1] += color_contribution*g*wx*cosf(fy*x.y);
+                        dCoefficients_temp[w_idx][0] += color_contribution*g*wy*__cosf(fx*x.x);
+                        dCoefficients_temp[w_idx][1] += color_contribution*g*wx*__cosf(fy*x.y);
                         //dPosition_temp.x += color_contribution*g*wy*coeffs[w_idx][0]*fx*sinf(fx*dx.x);
                         //dPosition_temp.y += color_contribution*g*wx*coeffs[w_idx][1]*fy*sinf(fy*dx.y);
                     }  
