@@ -298,24 +298,20 @@ namespace{
         atomicAdd(&output[i], temp_result);
     }
 
-    __global__ void preprocess_gaussians_step1(  
+    __global__ void preprocess_primitives(  
         int NUM_PRIMITIVES,
         float min_x, float min_y, 
         float range_x, float range_y,
         const float* __restrict__ positions,
         const float* __restrict__ scales,
-        uint32_t gaussians_per_block[BLOCKS_X][BLOCKS_Y],
-        uint32_t* __restrict__ gaussian_blocks
+        uint8_t* blocks_per_gaussian
         ) {
             // Get block/thread related numbers   
             const int index = blockIdx.x * blockDim.x + threadIdx.x;
             const int stride = blockDim.x * gridDim.x;
 
-            __shared__ uint32_t local_gaussians_per_block[BLOCKS_X][BLOCKS_Y];
-
+            uint8_t total_blocks = 0;
             for(int i = index; i < NUM_PRIMITIVES; i += stride){
-                uint32_t block_values[8] = {(uint32_t)0,(uint32_t)0,(uint32_t)0,(uint32_t)0,
-                                            (uint32_t)0,(uint32_t)0,(uint32_t)0,(uint32_t)0};
                 float sx = scales[2*i];
                 float sy = scales[2*i+1];
                 float px = positions[2*i];
@@ -332,24 +328,51 @@ namespace{
                 if(y_block_max >= BLOCKS_Y) y_block_max = BLOCKS_Y-1;
                 for (int x = x_block_min; x <= x_block_max; x++){
                     for (int y = y_block_min; y <= y_block_max; y++){
-                        atomicAdd(&local_gaussians_per_block[x][y], 1);
-                        set256bitOffset(block_values, y*BLOCKS_X+x);
+                        total_blocks++;
                     }
                 }
-                gaussian_blocks[8*i] = block_values[0];
-                gaussian_blocks[8*i+1] = block_values[1];
-                gaussian_blocks[8*i+2] = block_values[2];
-                gaussian_blocks[8*i+3] = block_values[3];
-                gaussian_blocks[8*i+4] = block_values[4];
-                gaussian_blocks[8*i+5] = block_values[5];
-                gaussian_blocks[8*i+6] = block_values[6];
-                gaussian_blocks[8*i+7] = block_values[7];
+                blocks_per_gaussian[i] = total_blocks;
             }
+        }
 
-            if(threadIdx.x == 0){
-                for (int x = 0; x < BLOCKS_X; x++){
-                    for (int y = 0; y < BLOCKS_Y; y++){
-                        atomicAdd(&gaussians_per_block[x][y], local_gaussians_per_block[x][y]);
+    __global__ void create_gaussian_instances(  
+        int NUM_PRIMITIVES,
+        float min_x, float min_y, 
+        float range_x, float range_y,
+        const float* __restrict__ positions,
+        const float* __restrict__ scales,
+        uint32_t* __restrict__ offsets,
+        uint64_t* __restrict__ unsorted_gaussians
+        ) {
+            // Get block/thread related numbers   
+            const int index = blockIdx.x * blockDim.x + threadIdx.x;
+            const int stride = blockDim.x * gridDim.x;
+
+            uint8_t total_blocks = 0;
+            for(int i = index; i < NUM_PRIMITIVES; i += stride){
+                //uint32_t off = (idx == 0) ? 0 : offsets[i - 1];
+                uint32_t off = offsets[i];
+                float sx = scales[2*i];
+                float sy = scales[2*i+1];
+                float px = positions[2*i];
+                float py = positions[2*i+1];
+                float r = 3.0f/min(sx, sy);
+                int x_block_min = BLOCKS_X*(px - r - min_x)/range_x;
+                int x_block_max = BLOCKS_X*(px + r - min_x)/range_x;
+                int y_block_min = BLOCKS_Y*(py - r - min_y)/range_y;
+                int y_block_max = BLOCKS_X*(py + r - min_y)/range_y;
+                
+                if(x_block_min < 0) x_block_min = 0;
+                if(y_block_min < 0) y_block_min = 0;
+                if(x_block_max >= BLOCKS_X) x_block_max = BLOCKS_X-1;
+                if(y_block_max >= BLOCKS_Y) y_block_max = BLOCKS_Y-1;
+                for (int x = x_block_min; x <= x_block_max; x++){
+                    for (int y = y_block_min; y <= y_block_max; y++){
+                        uint64_t key = y*BLOCKS_X+x;
+                        key <<= 32;
+                        key |= (uint32_t)i;
+                        unsorted_gaussians[off] = key;
+                        off++;
                     }
                 }
             }
@@ -555,9 +578,8 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     // Create output tensor and other tensors
     auto output = torch::zeros({batch_size, NUM_CHANNELS}, input.device());
     /*
-    uint32_t *gaussian_blocks;
-    unsigned long long bytes_needed = (8ull)*num_primitives*sizeof(uint32_t);
-    cudaError_t status = cudaMalloc((void**)&gaussian_blocks, bytes_needed);
+    //unsigned long long bytes_needed = (8ull)*num_primitives*sizeof(uint32_t);
+    //cudaError_t status = cudaMalloc((void**)&gaussian_blocks, bytes_needed);
     if (status != cudaSuccess) {
         fprintf(stderr, "cudaMalloc failed: %s\n", cudaGetErrorString(status));
         return {output};
@@ -571,17 +593,57 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     /*
     float range_x = max_x - min_x + 0.0000001f;
     float range_y = max_y - min_y + 0.0000001f;
-    uint32_t gaussians_per_block[BLOCKS_X][BLOCKS_Y];
-    preprocess_gaussians_step1<<<(num_primitives+NUM_THREADS-1)/NUM_THREADS,NUM_THREADS>>>(  
+    uint32_t blocks_per_gaussian[num_primitives];
+    uint32_t cumulative_sum[num_primitives];
+    uint32_t offsets[num_primitives];
+    preprocess_primitives<<<(num_primitives+512-1)/512,512>>>(  
         num_primitives,
         min_x, min_y,
         range_x, range_y,
         positions.contiguous().data_ptr<float>(),
         scales.contiguous().data_ptr<float>(),
-        gaussians_per_block,
-        gaussian_blocks
-        
-        );*/
+        blocks_per_gaussian        
+        );
+    
+    std::cout << "Hello World!" << std::endl;
+    
+    void* d_temp_storage = NULL;
+    *size_t temp_storage_bytes = 0;
+    cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes,
+		blocks_per_gaussian, offsets, batch_size);    
+    cudaMalloc(&d_temp_storage, temp_storage_bytes);
+    cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes,
+		blocks_per_gaussian, offsets, batch_size);    
+
+    uint32_t total_gaussian_instances = cumulative_sum[batch_size-1];
+    uint64_t unsorted_gaussians[total_gaussian_instances];
+
+    create_gaussian_instances<<<(num_primitives+512-1)/512,512>>>(
+        num_primitives,
+        min_x, min_y,
+        range_x, range_y,
+        positions.contiguous().data_ptr<float>(),
+        scales.contiguous().data_ptr<float>(),
+        offsets,
+        unsorted_gaussians
+    );
+    d_temp_storage = NULL;
+    temp_storage_bytes = 0;
+
+    cub::DeviceRadixSort::SortPairs(
+		d_temp_storage,
+		temp_storage_bytes,
+		unsorted_gaussians, binningState.point_list_keys,
+		binningState.point_list_unsorted, binningState.point_list,
+		total_gaussian_instances);
+    cudaMalloc(&d_temp_storage, temp_storage_bytes);
+    cub::DeviceRadixSort::SortPairs(
+		d_temp_storage,
+		temp_storage_bytes,
+		unsorted_gaussians, binningState.point_list_keys,
+		binningState.point_list_unsorted, binningState.point_list,
+		total_gaussian_instances);
+    */
 
     // Now parallelize over query points
     dim3 numBlocks ((batch_size+NUM_THREADS-1)/NUM_THREADS, (num_primitives+NUM_THREADS-1)/NUM_THREADS);

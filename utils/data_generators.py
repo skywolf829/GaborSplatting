@@ -312,6 +312,8 @@ def load_img(path):
     img = imageio.imread(path).astype(np.float32)/ 255.0
     #if(len(img.shape) == 3):
     #    img = img[:,:,0] 
+    if(img.shape[2] > 3):
+        img = img[:,:,0:3]
     print(f"Img shape: {img.shape}")
     #img = smooth_signal2D(img, window_size=100)
     return img
