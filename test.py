@@ -19,8 +19,8 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.manual_seed(7)
 
-test_iters = 10
-num_gaussians = 1
+test_iters = 1
+num_gaussians = 10
 num_waves = 0
 num_points = 1
 num_dimensions = 2
@@ -102,6 +102,8 @@ def forward_timing_test():
     print(f"======================================================")
     print(f"Forward pass time:")
 
+    print(x)
+    print(hp.gaussian_positions)
     torch.cuda.synchronize()
     t0 = time()
     for i in range(test_iters):
@@ -258,8 +260,8 @@ def profiler_test():
     print(prof.key_averages(group_by_input_shape=True).table(sort_by="self_cuda_time_total", row_limit=5))
 
 
-forward_error_test()
-backward_error_test()
+#forward_error_test()
+#backward_error_test()
 
 #forward_memory_test()
 #backward_memory_test()

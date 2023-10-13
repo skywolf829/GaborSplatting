@@ -198,9 +198,12 @@ class PeriodicPrimitives2D(torch.nn.Module):
                 0.05*torch.randn([num_gaussians, 2], dtype=torch.float32,  device=self.device)
         new_rotations = torch.pi*torch.rand([num_gaussians, 1],
                 dtype=torch.float32,  device=self.device)
-        new_wave_coefficients = 0.1*torch.randn([num_gaussians, self.num_frequencies, self.num_dimensions],
-                dtype=torch.float32,  device=self.device)
-        new_wave_coefficients[:,0,:] += 1.0
+        if(not self.gaussian_only):
+            new_wave_coefficients = 0.1*torch.randn([num_gaussians, self.num_frequencies, self.num_dimensions],
+                    dtype=torch.float32,  device=self.device)
+            new_wave_coefficients[:,0,:] += 1.0
+        else:
+            new_wave_coefficients = None
 
         tensor_dict = {
             "gaussian_colors": new_colors, 
@@ -216,7 +219,8 @@ class PeriodicPrimitives2D(torch.nn.Module):
         self.gaussian_positions = updated_params['gaussian_positions']
         self.gaussian_scales = updated_params['gaussian_scales']
         self.gaussian_rotations = updated_params['gaussian_rotations']
-        self.wave_coefficients = updated_params['wave_coefficients']
+        if(not self.gaussian_only):
+            self.wave_coefficients = updated_params['wave_coefficients']
 
     def get_num_primitives(self):
         return self.gaussian_colors.shape[0]
@@ -231,6 +235,8 @@ class PeriodicPrimitives2D(torch.nn.Module):
             if(group['name'] in tensors_dict):
                 assert len(group["params"]) == 1
                 extension_tensor = tensors_dict[group["name"]]
+                if extension_tensor is None:
+                    continue
                 stored_state = self.optimizer.state.get(group['params'][0], None)
                 if stored_state is not None:
 
@@ -261,12 +267,14 @@ class PeriodicPrimitives2D(torch.nn.Module):
         rotated_samples = torch.stack([samples[:,0]*torch.cos(-new_rotations[:,0]) + samples[:,1]*torch.sin(-new_rotations[:,0]),
                                samples[:,0]*-torch.sin(-new_rotations[:,0]) + samples[:,1]*torch.cos(-new_rotations[:,0])], dim=-1)
         new_positions = self.gaussian_positions[indices].clone() + rotated_samples
-        new_colors = self.gaussian_colors[indices].clone() * 0.2
+        new_colors = self.gaussian_colors[indices].clone() * 0.05
         new_scales = self.gaussian_scales[indices].clone() + np.log(1.8)
-        new_wave_coefficients = self.wave_coefficients[indices].clone()
-
-        self.gaussian_scales[indices] += np.log(1.4)
-        self.gaussian_colors[indices] *= 0.8
+        if(not self.gaussian_only):
+            new_wave_coefficients = self.wave_coefficients[indices].clone()
+        else:
+            new_wave_coefficients = None
+        self.gaussian_scales[indices] += np.log(1.1)
+        #self.gaussian_colors[indices] *= 0.9
 
         tensor_dict = {
             "gaussian_colors": new_colors, 
@@ -281,7 +289,8 @@ class PeriodicPrimitives2D(torch.nn.Module):
         self.gaussian_positions = updated_params['gaussian_positions']
         self.gaussian_scales = updated_params['gaussian_scales']
         self.gaussian_rotations = updated_params['gaussian_rotations']
-        self.wave_coefficients = updated_params['wave_coefficients']
+        if(not self.gaussian_only):
+            self.wave_coefficients = updated_params['wave_coefficients']
 
         return new_prims
         
@@ -333,6 +342,8 @@ class PeriodicPrimitives2D(torch.nn.Module):
     def prune_tensors_from_optimizer(self, mask):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
+            if(self.gaussian_only and group['name'] == "wave_coefficients"):
+                continue
             if(group['params'][0].shape[0] == mask.shape[0]):
                 stored_state = self.optimizer.state.get(group['params'][0], None)
                 if stored_state is not None:
@@ -369,7 +380,8 @@ class PeriodicPrimitives2D(torch.nn.Module):
                 self.gaussian_positions = updated_params['gaussian_positions']
                 self.gaussian_scales = updated_params['gaussian_scales']
                 self.gaussian_rotations = updated_params['gaussian_rotations']
-                self.wave_coefficients = updated_params['wave_coefficients']
+                if not self.gaussian_only:
+                    self.wave_coefficients = updated_params['wave_coefficients']
         return to_remove
         
     def loss(self, x, y):
