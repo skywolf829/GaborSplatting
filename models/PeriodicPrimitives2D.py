@@ -52,7 +52,7 @@ class PeriodicPrimitivesFunction(torch.autograd.Function):
                 gaussian_rotations, topk_wave_coefficients,
                 topk_wave_indices,
                 num_top_frequencies, num_random_frequencies,
-                max_frequency, gaussian_only):
+                max_frequency, gaussian_only, heatmap=False):
         """
         In the forward pass we receive a Tensor containing the input and return
         a Tensor containing the output. ctx is a context object that can be used
@@ -63,7 +63,7 @@ class PeriodicPrimitivesFunction(torch.autograd.Function):
         outputs = periodic_primitives.forward(x, 
             gaussian_colors, gaussian_positions, gaussian_scales,
             gaussian_rotations, topk_wave_coefficients, topk_wave_indices, 
-            max_frequency, gaussian_only)
+            max_frequency, gaussian_only, heatmap)
         result = outputs[0]
 
         variables = [x, gaussian_colors, gaussian_positions, 
@@ -88,7 +88,7 @@ class PeriodicPrimitivesFunction(torch.autograd.Function):
             grad_gaussian_rotations, grad_wave_coefficients = outputs
         return grad_output, grad_gaussian_colors, grad_gaussian_positions, \
               grad_gaussian_scales, grad_gaussian_rotations, grad_wave_coefficients, \
-              None, None, None, None, None
+              None, None, None, None, None, None
 
 
 class PeriodicPrimitives2D(torch.nn.Module):
@@ -329,13 +329,11 @@ class PeriodicPrimitives2D(torch.nn.Module):
     
     def vis_heatmap(self, points):
         top_k_coeffs, top_k_indices = self.get_topk_waves()
-        outputs = periodic_primitives.heatmap(points, 
-            self.gaussian_positions, torch.exp(self.gaussian_scales),
-            self.gaussian_rotations, 
-            top_k_coeffs, top_k_indices, 
-            self.max_frequency, self.gaussian_only)
+        outputs = PeriodicPrimitivesFunction.apply(points, 
+            self.gaussian_colors, self.gaussian_positions, torch.exp(self.gaussian_scales),
+            self.gaussian_rotations, top_k_coeffs, top_k_indices,
+            self.num_top_freqs, self.num_random_freqs, self.max_frequency, self.gaussian_only, True)
         heatmap = outputs[0]
-        #heatmap -= heatmap.min()
         heatmap = heatmap / heatmap.max()
         return heatmap
 
