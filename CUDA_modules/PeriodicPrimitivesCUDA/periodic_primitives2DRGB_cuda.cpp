@@ -9,9 +9,9 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     torch::Tensor rotations,                    // [M, 1]
     torch::Tensor wave_coefficients,            // [M, n_dim, n_freqs]
     torch::Tensor wave_coefficient_indices,    
-    const float MAX_FREQUENCY,
+    const float max_frequency,
     const bool gaussian_only,
-    const bool heatmap
+    const bool heatmap = false
 );
 
 std::vector<torch::Tensor> periodic_primitives_backward_cuda(
@@ -23,9 +23,14 @@ std::vector<torch::Tensor> periodic_primitives_backward_cuda(
     torch::Tensor rotations,                    // [M, n_dim, n_freqs]
     torch::Tensor wave_coefficients,            // [M, n_dim, n_freqs]
     torch::Tensor wave_coefficient_indices,     // [M, n_dim, n_freqs]
-    const float MAX_FREQUENCY,    
+    torch::Tensor gaussian_instance_indices,
+    torch::Tensor block_start_end_index_gaussians,
+    torch::Tensor query_indices,
+    torch::Tensor block_start_end_index_query_points,
+    const float max_frequency,    
     const bool gaussian_only
     );        
+
 
 // C++ interface
 
@@ -41,7 +46,7 @@ std::vector<torch::Tensor> periodic_primitives_forward(
     torch::Tensor rotations,                    // [M, 1]
     torch::Tensor wave_coefficients,            // [M, n_dim, n_freqs]
     torch::Tensor wave_coefficient_indices,     // [M, n_dim, n_freqs]
-    const float MAX_FREQUENCY,
+    const float max_frequency,
     const bool gaussian_only,
     const bool heatmap = false
     ) {
@@ -51,7 +56,8 @@ std::vector<torch::Tensor> periodic_primitives_forward(
     CHECK_INPUT(scales);
     CHECK_INPUT(rotations);
     CHECK_INPUT(wave_coefficients);
-
+    CHECK_INPUT(wave_coefficient_indices);
+    
     return periodic_primitives_forward_cuda(
         input, 
         colors,
@@ -60,7 +66,7 @@ std::vector<torch::Tensor> periodic_primitives_forward(
         rotations,
         wave_coefficients,
         wave_coefficient_indices,
-        MAX_FREQUENCY,
+        max_frequency,
         gaussian_only,
         heatmap
         );
@@ -75,7 +81,11 @@ std::vector<torch::Tensor> periodic_primitives_backward(
     torch::Tensor rotations,                    // [M, n_dim, n_freqs]
     torch::Tensor wave_coefficients,            // [M, n_dim, n_freqs]
     torch::Tensor wave_coefficient_indices,     // [M, n_dim, n_freqs]
-    const float MAX_FREQUENCY,
+    torch::Tensor gaussian_instance_indices,
+    torch::Tensor block_start_end_index_gaussians,
+    torch::Tensor query_indices,
+    torch::Tensor block_start_end_index_query_points,
+    const float max_frequency,    
     const bool gaussian_only
     ) {
     CHECK_INPUT(grad_output);
@@ -86,7 +96,11 @@ std::vector<torch::Tensor> periodic_primitives_backward(
     CHECK_INPUT(rotations);
     CHECK_INPUT(wave_coefficients);
     CHECK_INPUT(wave_coefficient_indices);
-
+    CHECK_INPUT(gaussian_instance_indices);
+    CHECK_INPUT(block_start_end_index_gaussians);
+    CHECK_INPUT(query_indices);
+    CHECK_INPUT(block_start_end_index_query_points);
+    
     return periodic_primitives_backward_cuda(
         grad_output, 
         input,
@@ -96,7 +110,11 @@ std::vector<torch::Tensor> periodic_primitives_backward(
         rotations,
         wave_coefficients,
         wave_coefficient_indices,
-        MAX_FREQUENCY,
+        gaussian_instance_indices,
+        block_start_end_index_gaussians,
+        query_indices,
+        block_start_end_index_query_points,
+        max_frequency,
         gaussian_only
         );
 }

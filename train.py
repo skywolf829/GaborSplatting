@@ -37,26 +37,28 @@ def log_imgs(writer, model, g, img_shape, i):
         img = model(g).reshape(img_shape+[model.n_channels])
         img = to_img(img)
         writer.add_image('reconstruction', img, i, dataformats='HWC')
-        heatmap = model.vis_heatmap(g).reshape(img_shape)
-        heatmap = to_img(heatmap)[...,None]
+        heatmap = model.vis_heatmap(g).reshape(img_shape+[model.n_channels])
+        heatmap = to_img(heatmap)
         writer.add_image('heatmap', heatmap, i, dataformats='HWC')
        
 def log_frequencies(writer, model, i):
-    freqs = model.get_weighed_frequency_dist()
-    writer.add_histogram("Frequency distribution", freqs, i)
+    if(not model.gaussian_only):
+        freqs = model.get_weighed_frequency_dist()
+        writer.add_histogram("Frequency distribution", freqs, i)
+    writer.add_histogram("Scale distribution", model.gaussian_scales.flatten(), i)
 
 if __name__ == '__main__':
     
     total_iters = 30000
     fine_tune_iters = 5000  
-    starting_primitives = 100
-    total_primitives = 800000
+    starting_primitives = 2560
+    total_primitives = 50000
     only_gaussians = True
     
     split_every = 1000
     prune_every = 100
+    black_out_every = 3000
 
-    model_type = PeriodicPrimitives2D
     img_name = "pluto.png"
 
     device = "cuda"
@@ -65,8 +67,8 @@ if __name__ == '__main__':
     training_img = load_img("./data/"+img_name)
     img_shape = list(training_img.shape)[0:2]
     training_img_copy = (training_img.copy() * 255).astype(np.uint8)
-    og_img_shape = training_img.shape
-    model = model_type(device=device, n_channels=3, gaussian_only=only_gaussians)
+    og_img_shape = list(training_img.shape)
+    model = PeriodicPrimitives2D(device=device, n_channels=3, gaussian_only=only_gaussians, total_iters=total_iters)
     n_extracted_peaks = model.add_primitives(starting_primitives)
 
     g_x = torch.arange(0, og_img_shape[0], dtype=torch.float32, device=device) / (og_img_shape[0]-1)
@@ -109,11 +111,19 @@ if __name__ == '__main__':
 
     ) as prof:
         for i in t:
+            
+            # image logging
+            if i % 1000 == 0 and i > 0:
+                log_imgs(writer, model, g, scaled_img_shape, i)
+            # histogram logging
+            if i % 1000 == 0 and i > 0:
+                log_frequencies(writer, model, i)
+
             model.update_learning_rate(i)
             mask = torch.rand(x.shape[0], device=x.device, dtype=torch.float32) < pct_of_data
 
             # Prune primitives
-            if i % prune_every == 0 and i > 0:
+            if i % prune_every == 0 and i > 0 and prune_every > 0:
                 with torch.no_grad():
                     prims_removed = model.prune_primitives(1./500.)
                     writer.add_scalar("Primitives pruned", prims_removed, i)
@@ -126,39 +136,42 @@ if __name__ == '__main__':
                 num_to_add = int(num_to_go/splits_left)
                 if(num_to_add > 0):
                     if(model.get_num_primitives() > 0):
-                        losses, model_out = model.loss(x[mask], y[mask])
-                        losses['final_loss'].backward()
-                        p = model.gaussian_positions.grad.detach().clone()
-                        s = model.gaussian_rotations.grad.detach().clone()
-                        r = model.gaussian_rotations.grad.detach().clone()
                         with torch.no_grad():
-                            new_prims = model.split_prims(p, s, r, num_to_add)
+                            new_prims = model.split_prims(num_to_add)
                             writer.add_scalar("Prims split", new_prims, i)
                         model.zero_grad()
                     else:
                         with torch.no_grad():
                             n_extracted_peaks = model.add_primitives(starting_primitives)
-
+            if i % black_out_every == 0 and i > 0 and black_out_every > 0 and i < total_iters - fine_tune_iters:
+                with torch.no_grad():
+                    model.gaussian_colors *= 0.001
             
             model.optimizer.zero_grad()
             losses, model_out = model.loss(x[mask], y[mask])
             losses['final_loss'].backward()
+            with torch.no_grad():
+                model.cumulative_gradients *= 0.95
+                model.cumulative_gradients += torch.norm(model.gaussian_positions.grad, dim=1)
+                model.cumulative_gradients += torch.norm(model.gaussian_scales.grad, dim=1)
             model.optimizer.step()
                 
             # logging
-            if i % 10 == 0:
+            if i % 100 == 0:
                 p = log_scalars(writer, model, losses, i)
                 t.set_description(f"[{i+1}/{total_iters}] PSNR: {p:0.04f}")
-            # image logging
-            if i % 250 == 0 and i > 0:
-                log_imgs(writer, model, g, scaled_img_shape, i)
-            # histogram logging
-            if i % 100 == 0 and i > 0 and not model.gaussian_only:
-                log_frequencies(writer, model, i)
             prof.step()
 
     with torch.no_grad():
-        output = model(x)
+        output = torch.empty([x.shape[0], model.n_channels], dtype=torch.float32, device=model.device)
+        max_batch = int((2**28) / 256.)
+        for i in range(0, x.shape[0], max_batch):
+            end = min(output.shape[0], i+max_batch)
+            output[i:end] = model(x[i:end])
+        final_im = to_img(output.reshape(og_img_shape))
+        print(final_im.shape)
+        imageio.imwrite(os.path.join("./output", run_name+".jpg"), final_im)
+        #writer.add_image("Final image", final_im)
         p = psnr(output,y).item()
         print(f"Final PSNR: {p:0.02f}")
         writer.add_scalar("Params vs. PSNR", 

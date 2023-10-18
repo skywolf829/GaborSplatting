@@ -19,17 +19,14 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.manual_seed(7)
 
-test_iters = 1
-num_gaussians = 10
-num_waves = 0
-num_points = 1
+test_iters = 10
+num_primitives = 50000#2**20
+num_points = 2**17
 num_dimensions = 2
 
 hp = PeriodicPrimitives2D(gaussian_only=True)
-hp.add_primitives_random(num_gaussians)
+hp.add_primitives_random(num_primitives)
 
-#hp = HybridPrimitives()
-#hp.add_random_gaussians(num_gaussians)
 
 x = torch.rand([num_points, num_dimensions], device="cuda", dtype=torch.float32)
 
@@ -102,12 +99,10 @@ def forward_timing_test():
     print(f"======================================================")
     print(f"Forward pass time:")
 
-    print(x)
-    print(hp.gaussian_positions)
     torch.cuda.synchronize()
     t0 = time()
     for i in range(test_iters):
-        _ = hp.forward(x)
+        y = hp.forward(x)
     torch.cuda.synchronize()
     time_cuda = time() - t0 + 1e-12
     print(f"CUDA kernel:\t\t{time_cuda/test_iters:0.09f} sec. per pass \t {test_iters/time_cuda} FPS")
@@ -200,8 +195,8 @@ def forward_error_test():
         print("Memory error - PyTorch exceeded the maximum GPU memory. Cant assess error.")
         raise e
     out_cuda = hp.forward(x)
-    print(out_pytorch)
-    print(out_cuda)
+    #print(out_pytorch)
+    #print(out_cuda)
     error = torch.abs(out_pytorch-out_cuda).flatten()
     mse = error.mean()
     max_error = error.max()
@@ -261,12 +256,12 @@ def profiler_test():
 
 
 #forward_error_test()
-#backward_error_test()
+backward_error_test()
 
 #forward_memory_test()
 #backward_memory_test()
 
-forward_timing_test()
+#forward_timing_test()
 #inference_timing_test()
 #backward_timing_test()
 #profiler_test()
