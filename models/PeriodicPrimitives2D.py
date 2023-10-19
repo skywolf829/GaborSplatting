@@ -137,8 +137,8 @@ class PeriodicPrimitives2D(torch.nn.Module):
         self.scale_scheduler = get_expon_lr_func(lr_init=0.001,
                                                     lr_final=0.00001,
                                                     max_steps=total_iters)
-        self.wave_scheduler = get_expon_lr_func(lr_init=0.0001,
-                                                    lr_final=0.0001,
+        self.wave_scheduler = get_expon_lr_func(lr_init=0.001,
+                                                    lr_final=0.001,
                                                     max_steps=total_iters)
         self.rotation_scheduler = get_expon_lr_func(lr_init=0.0001,
                                                     lr_final=0.0001,
@@ -179,7 +179,7 @@ class PeriodicPrimitives2D(torch.nn.Module):
         total = 0
         for group in self.optimizer.param_groups:    
             if(group['name'] == 'wave_coefficients' and not self.gaussian_only):
-                total += self.gaussian_colors.shape[0]*(self.num_top_freqs + self.num_random_freqs)*self.gaussian_positions.shape[1]
+                total += self.gaussian_colors.shape[0]*(self.num_top_freqs + self.num_random_freqs)
             elif(group['name'] != 'wave_coefficients'):   
                 total += group['params'][0].numel()
         return total
@@ -196,7 +196,7 @@ class PeriodicPrimitives2D(torch.nn.Module):
         return total
     
     def get_weighed_frequency_dist(self):
-        top_k_coeffs, top_k_indices = self.get_topk_waves()
+        top_k_coeffs, top_k_indices = self.get_topk_waves(with_random=False)
         frequencies = top_k_indices*self.max_frequency / self.num_frequencies
         return frequencies.flatten()
 
@@ -205,14 +205,16 @@ class PeriodicPrimitives2D(torch.nn.Module):
                 dtype=torch.float32, device=self.device))
         new_positions = torch.rand([num_gaussians, self.num_dimensions], 
                 dtype=torch.float32, device=self.device)
-        new_scales = 4 + torch.randn([num_gaussians, 1], 
+        new_scales = 3 + torch.randn([num_gaussians, 1], 
                 dtype=torch.float32,  device=self.device).repeat(1, 2) + \
                 0.05*torch.randn([num_gaussians, 2], dtype=torch.float32,  device=self.device)
         new_rotations = torch.pi*torch.rand([num_gaussians, 1],
                 dtype=torch.float32,  device=self.device)
         if(not self.gaussian_only):
-            new_wave_coefficients = 0.1*torch.randn([num_gaussians, self.num_frequencies],
-                    dtype=torch.float32,  device=self.device)
+            new_wave_coefficients = (2*torch.rand([num_gaussians, self.num_frequencies],
+                    dtype=torch.float32,  device=self.device)-1) * \
+                    torch.linspace(0.001, 0.0001, self.num_frequencies, device=self.device, dtype=torch.float32)[None,:].repeat(num_gaussians, 1)
+            new_wave_coefficients[:,0] = 1.0
         else:
             new_wave_coefficients = None
 
@@ -283,6 +285,8 @@ class PeriodicPrimitives2D(torch.nn.Module):
         new_scales = self.gaussian_scales[indices].clone() + np.log(1.9)
         if(not self.gaussian_only):
             new_wave_coefficients = self.wave_coefficients[indices].clone()
+            new_wave_coefficients[:,1:] *= 0.01
+            new_wave_coefficients[:,0] = 1.
         else:
             new_wave_coefficients = None
         self.gaussian_scales[indices] += np.log(1.1)
@@ -371,15 +375,19 @@ class PeriodicPrimitives2D(torch.nn.Module):
                     optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
 
-    def prune_primitives(self, min_contribution:int=1./1000.):
+    def prune_primitives(self, min_contribution:int=1./1000., min_width = 8192.):
 
         exp_scales = torch.exp(self.gaussian_scales)
-        r = 3/exp_scales.min(dim=1).values
-        on_image = (self.gaussian_positions[:,0]+r >= 0) * (self.gaussian_positions[:,0]-r <= 1.0) * \
-                    (self.gaussian_positions[:,1]+r >= 0) * (self.gaussian_positions[:,1]-r <= 1.0)
-        gaussians_mask = (torch.linalg.norm(self.gaussian_colors,dim=-1) > min_contribution) * on_image
-        #if(not self.gaussian_only):
-        #    gaussians_mask *= (torch.linalg.norm(self.wave_coefficients,dim=1).prod(dim=-1) > min_contribution)
+        r_max = 3/exp_scales.min(dim=1).values
+        inv_r_min = exp_scales.max(dim=1).values
+        on_image = (self.gaussian_positions[:,0]+r_max >= 0) * (self.gaussian_positions[:,0]-r_max <= 1.0) * \
+                    (self.gaussian_positions[:,1]+r_max >= 0) * (self.gaussian_positions[:,1]-r_max <= 1.0)
+        large_enough = inv_r_min < min_width
+        if(not self.gaussian_only):
+            gaussians_mask = ((torch.linalg.norm(self.gaussian_colors,dim=-1) * \
+                (torch.linalg.norm(self.wave_coefficients, dim=-1))) > min_contribution) * on_image * large_enough
+        else:
+            gaussians_mask = (torch.linalg.norm(self.gaussian_colors,dim=-1) > min_contribution) * on_image * large_enough
 
         to_remove = 0
         if(len(gaussians_mask.shape)>0):
@@ -407,13 +415,20 @@ class PeriodicPrimitives2D(torch.nn.Module):
         }
         return losses, model_out
 
-    def get_topk_waves(self):
+    def get_topk_waves(self, with_random = True):
         if(self.training):
             coefficients_to_send, indices_to_send = torch.topk(torch.abs(self.wave_coefficients),
                                     self.num_top_freqs, dim=1, sorted=False)
             coefficients_to_send = coefficients_to_send * torch.gather(self.wave_coefficients.sign(), dim=1, index=indices_to_send)
-            
             indices_to_send = indices_to_send.type(torch.int)
+            if(self.num_random_freqs > 0 and with_random):
+                rand_indices = torch.topk(torch.randint(0, self.wave_coefficients.shape[1]-1, 
+                                        self.wave_coefficients.shape, device=self.device, dtype=torch.int), 
+                                        self.num_random_freqs, sorted=False, dim=1).indices
+                rand_coefficients = torch.gather(self.wave_coefficients.detach(), dim=1, index=rand_indices)
+
+                coefficients_to_send = torch.cat([coefficients_to_send, rand_coefficients], dim=0)
+                indices_to_send = torch.cat([indices_to_send, rand_indices.type(torch.int)], dim=0)
 
         else:
             coefficients_to_send = self.wave_coefficients
@@ -443,7 +458,7 @@ class PeriodicPrimitives2D(torch.nn.Module):
         g = torch.exp(-0.5*(rs_x*rs_x + rs_y*rs_y))
         
         if(not self.gaussian_only):
-            w = top_k_coeffs[None,...]*torch.cos(g[...,None]*self.max_frequency*(1+top_k_indices[None,...])/self.num_frequencies)
+            w = top_k_coeffs[None,...]*torch.cos((1-g[...,None])*self.max_frequency*(top_k_indices[None,...])/self.num_frequencies)
             w = w.sum(dim=2)
             g = g*w
         return g@self.gaussian_colors 

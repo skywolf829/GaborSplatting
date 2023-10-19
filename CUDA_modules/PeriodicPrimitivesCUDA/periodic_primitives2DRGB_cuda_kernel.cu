@@ -259,10 +259,10 @@ __global__ void periodic_primitives_forward_cuda_kernel(
                 float2 tx = { gaussian_scales[j][0]*(dx.x*cosr  + dx.y*sinr),
                             gaussian_scales[j][1]*(dx.x*-sinr + dx.y*cosr) };
                 float g = __expf(-(tx.x*tx.x + tx.y*tx.y)/2);
-                float w = 1.0f;
+                float w = 0.0f;
                 for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES && !gaussian_only; w_idx++){
-                    float f = max_frequency*(1+coefficient_indices[j][w_idx])/(float)TOTAL_NUM_FREQUENCIES;
-                    w += coefficients[j][w_idx]*__cosf(f*g);
+                    float f = max_frequency*(coefficient_indices[j][w_idx])/(float)TOTAL_NUM_FREQUENCIES;
+                    w += coefficients[j][w_idx]*__cosf(f*(1-g));
                 }            
                 if(!gaussian_only) g *= w;
                 if(heatmap){
@@ -369,6 +369,7 @@ __global__ void periodic_primitives_backward_cuda_kernel(
             for(int j = 0; j < end_idx_this_batch; j++){
                 float2 x = {query_point_positions[j][0], query_point_positions[j][1]};
                 float3 dRGB_f3 = {dRGB[j][0], dRGB[j][1], dRGB[j][2]};
+                float color_contribution = dRGB_f3.x*color.x+dRGB_f3.y*color.y+dRGB_f3.z*color.z;
 
                 float2 dx = x - pos;
                 float cosr = __cosf(r);
@@ -376,29 +377,38 @@ __global__ void periodic_primitives_backward_cuda_kernel(
                 float2 tx = { s.x*(dx.x*cosr  + dx.y*sinr),
                             s.y*(dx.x*-sinr + dx.y*cosr) };
                 float g = __expf(-0.5*(tx.x*tx.x + tx.y*tx.y));
-                float w = 1.0f;
+                float w = 0.0f;
                 for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES && !gaussian_only; w_idx++){
-                    float f = max_frequency*(1+coeff_index[w_idx])/(float)TOTAL_NUM_FREQUENCIES;
-                    w += coeff[w_idx]*__cosf(f*g);
+                    float f = max_frequency*(coeff_index[w_idx])/(float)TOTAL_NUM_FREQUENCIES;
+                    w += coeff[w_idx]*__cosf(f*(1-g));
+
+                    dCoefficients_temp[w_idx] += color_contribution*g*__cosf(f*(1-g));
+
+                    float deriv_coeff = color_contribution*g*coeff[w_idx]*__sinf(f*(1-g))*f;
+                    dPosition_temp.x += deriv_coeff*g*-(-tx.x*s.x*cosr - tx.y*s.y*-sinr);
+                    dPosition_temp.y += deriv_coeff*g*-(-tx.x*s.x*sinr - tx.y*s.y*cosr);
+                    dScale_temp.x += deriv_coeff*tx.x*g*-(dx.x*cosr  + dx.y*sinr);
+                    dScale_temp.y += deriv_coeff*tx.y*g*-(dx.x*-sinr+dx.y*cosr);
+                    dRotation_temp += deriv_coeff*g*-(tx.x*(s.x*dx.x*-sinr+s.x*dx.y*cosr) 
+                                                    + tx.y*(s.y*dx.x*-cosr + s.y*dx.y*-sinr)); 
                 }       
 
-                float color_contribution = dRGB_f3.x*color.x+dRGB_f3.y*color.y+dRGB_f3.z*color.z;
-                float shared_coeff = color_contribution*g*w;
-                
-                dColor_temp += g*w*dRGB_f3;
+                float shared_coeff = color_contribution*g;
+                if(!gaussian_only){
+                    shared_coeff *= w;
+                    dColor_temp += g*w*dRGB_f3;
+                }
+                else{
+                    dColor_temp += g*dRGB_f3;
+                }
+
                 dPosition_temp.x += shared_coeff*-(-tx.x*s.x*cosr - tx.y*s.y*-sinr);
                 dPosition_temp.y += shared_coeff*-(-tx.x*s.x*sinr - tx.y*s.y*cosr);
                 dScale_temp.x += shared_coeff*tx.x*-(dx.x*cosr  + dx.y*sinr);
                 dScale_temp.y += shared_coeff*tx.y*-(dx.x*-sinr+dx.y*cosr);
                 dRotation_temp += shared_coeff*-(tx.x*(s.x*dx.x*-sinr+s.x*dx.y*cosr) 
                                                 + tx.y*(s.y*dx.x*-cosr + s.y*dx.y*-sinr)); 
-                                                
-                if(!gaussian_only){
-                    for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES; w_idx++){
-                        float f = max_frequency*coeff_index[w_idx]/(float)TOTAL_NUM_FREQUENCIES;
-                        dCoefficients_temp[w_idx] += color_contribution*g*w*__cosf(f*g);
-                    }  
-                }     
+                      
             }
             atomicAdd(&dColors[3*real_query_index], dColor_temp.x);
             atomicAdd(&dColors[3*real_query_index+1], dColor_temp.y);
@@ -411,7 +421,8 @@ __global__ void periodic_primitives_backward_cuda_kernel(
             
             if(!gaussian_only){
                 for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES; w_idx++){
-                    dCoefficients[real_query_index*SELECTED_NUM_FREQUENCIES + w_idx] = dCoefficients_temp[w_idx];
+                    atomicAdd(&dCoefficients[real_query_index*SELECTED_NUM_FREQUENCIES + w_idx], 
+                        dCoefficients_temp[w_idx]);
                 }
             }
         }      

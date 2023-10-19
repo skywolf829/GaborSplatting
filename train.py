@@ -6,8 +6,10 @@ print("Successfully loaded HybridPrimitives.")
 #from models.Siren import Siren
 from utils.data_generators import load_img
 import torch
+from torchmetrics.image import StructuralSimilarityIndexMeasure as ssim
 import matplotlib.pyplot as plt
 import numpy as np
+import argparse
 import imageio.v3 as imageio
 from tqdm import tqdm
 from utils.data_utils import to_img, psnr
@@ -18,6 +20,16 @@ import os
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 os.environ['KINETO_LOG_LEVEL'] = '3'
 
+def str2bool(v):
+    if isinstance(v, bool):
+       return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+    
 def log_scalars(writer, model, losses, i):
     with torch.no_grad():
         writer.add_scalar("Loss", losses['final_loss'].item(), i)     
@@ -45,54 +57,125 @@ def log_frequencies(writer, model, i):
     if(not model.gaussian_only):
         freqs = model.get_weighed_frequency_dist()
         writer.add_histogram("Frequency distribution", freqs, i)
-    writer.add_histogram("Scale distribution", model.gaussian_scales.flatten(), i)
+    writer.add_histogram("Inverse scale distribution", torch.exp(model.gaussian_scales.flatten()), i)
 
+class ImageDataset(torch.utils.data.Dataset):
+    """Face Landmarks dataset."""
+
+    def __init__(self, img_path, batch_size=2**17, device="cuda"):
+        """
+        Arguments:
+            csv_file (string): Path to the csv file with annotations.
+            root_dir (string): Directory with all the images.
+            transform (callable, optional): Optional transform to be applied
+                on a sample.
+        """
+        self.batch_size = batch_size
+        self.device = device
+        training_img = load_img("./data/"+img_path)
+        img_shape = list(training_img.shape)[0:2]
+        self.og_img_shape = list(training_img.shape)
+        
+        g_x = torch.arange(0, img_shape[0], dtype=torch.float32, device=device) / (img_shape[0]-1)
+        g_y = torch.arange(0, img_shape[1], dtype=torch.float32, device=device) / (img_shape[1]-1)
+        training_img_positions = torch.stack(torch.meshgrid([g_x, g_y], indexing='ij'), 
+                                            dim=-1).reshape(-1, 2).type(torch.float32)
+        training_img_colors = torch.tensor(training_img, dtype=torch.float32, device=device).reshape(-1,training_img.shape[-1])
+
+        self.x = training_img_positions
+        self.y = training_img_colors 
+        
+        max_img_reconstruction_dim_size = 1024    
+        xmin = self.x.min(dim=0).values
+        xmax = self.x.max(dim=0).values
+
+        img_scale = max_img_reconstruction_dim_size/max(img_shape)
+        self.training_preview_img_shape = [int(img_shape[i]*img_scale) for i in range(xmin.shape[0])]
+        g = [torch.linspace(xmin[i], xmax[i], self.training_preview_img_shape[i], device=model.device) for i in range(xmin.shape[0])]
+        self.training_preview_positions = torch.stack(torch.meshgrid(g, indexing='ij'), dim=-1).flatten(0, -2)
+
+        self.training_samples = torch.rand(len(self), device=self.device)
+
+    def __len__(self):
+        return self.x.shape[0]
+
+    def __getitem__(self, idx):
+        if(self.batch_size < len(self)):
+            sample = self.training_samples.random_().topk(self.batch_size, dim=0).indices
+            return self.x[sample], self.y[sample]
+        else:
+            return self.x, self.y
+    
 if __name__ == '__main__':
     
-    total_iters = 30000
-    fine_tune_iters = 5000  
-    starting_primitives = 2560
-    total_primitives = 50000
-    only_gaussians = True
-    
-    split_every = 1000
-    prune_every = 100
-    black_out_every = 3000
-
-    img_name = "pluto.png"
-
-    device = "cuda"
     torch.random.manual_seed(42)
     np.random.seed(42)
-    training_img = load_img("./data/"+img_name)
-    img_shape = list(training_img.shape)[0:2]
-    training_img_copy = (training_img.copy() * 255).astype(np.uint8)
-    og_img_shape = list(training_img.shape)
-    model = PeriodicPrimitives2D(device=device, n_channels=3, gaussian_only=only_gaussians, total_iters=total_iters)
-    n_extracted_peaks = model.add_primitives(starting_primitives)
 
-    g_x = torch.arange(0, og_img_shape[0], dtype=torch.float32, device=device) / (og_img_shape[0]-1)
-    g_y = torch.arange(0, og_img_shape[1], dtype=torch.float32, device=device) / (og_img_shape[1]-1)
-    training_img_positions = torch.stack(torch.meshgrid([g_x, g_y], indexing='ij'), 
-                                        dim=-1).reshape(-1, 2).type(torch.float32)
-    training_img_colors = torch.tensor(training_img, dtype=torch.float32, device=device).reshape(-1,training_img.shape[-1])
+    parser = argparse.ArgumentParser(description='Trains an implicit model on data.')
 
-    x = training_img_positions
-    y = training_img_colors 
+    parser.add_argument('--n_dims',default=2,type=int,
+        help='Number of dimensions in the data')
+    parser.add_argument('--n_outputs',default=3,type=int,
+        help='Number of output channels for the data (ex. 1 for scalar field, 3 for image or vector field)')
+    parser.add_argument('--n_gaussians',default=100000,type=int,
+        help='Number of gaussians to use')
+    parser.add_argument('--n_starting_gaussians',default=2560,type=int,
+        help='Number of gaussians to use at start')
+    parser.add_argument('--gaussian_only',default="False",type=str2bool,
+        help='Whether to use only gaussians or include the waveform part.')  
+    parser.add_argument('--max_frequency',default=128.,type=float,
+        help='Maximum frequency for a primitive.') 
+    parser.add_argument('--num_frequencies',default=128,type=int,
+        help='Total number of frequencies per primitive.') 
+    parser.add_argument('--data',default=None,type=str,
+        help='Data file name')
+    parser.add_argument('--save_name',default=None,type=str,
+        help='Save name for the model')
+    parser.add_argument('--batch_size',default=2**17,type=int,
+        help='Batch size per update')  
+    parser.add_argument('--train_iters',default=30000,type=int,
+        help='Number of iterations to train total')    
+    parser.add_argument('--fine_tune_iters',default=5000,type=int,
+        help='Number of iterations to fine tune')    
+    parser.add_argument('--split_iters',default=1000,type=int,
+        help='Iterations between gaussian splits')     
+    parser.add_argument('--prune_iters',default=100,type=int,
+        help='Iterations between gaussian pruning')  
+    parser.add_argument('--black_out_iters',default=3000,type=int,
+        help='Iterations between blackouts')  
+    parser.add_argument('--device',default="cuda:0",type=str,
+        help='Which device to train on')
+    args = vars(parser.parse_args())
+
+
+    total_iters = args['train_iters']
+    fine_tune_iters = args['fine_tune_iters']  
+    starting_primitives = args['n_starting_gaussians']
+    total_primitives = args['n_gaussians']
+    only_gaussians = args['gaussian_only']
     
-    max_img_reconstruction_dim_size = 1024    
-    batch_size = 2**17
-    pct_of_data = batch_size / x.shape[0]
-    xmin = x.min(dim=0).values
-    xmax = x.max(dim=0).values
+    split_every = args['split_iters']
+    prune_every = args['prune_iters']
+    black_out_every = args['black_out_iters']
+    batch_size = args['batch_size']
+    img_name = args['data']
+    device = args['device']
 
-    img_scale = max_img_reconstruction_dim_size/max(img_shape)
-    scaled_img_shape = [int(img_shape[i]*img_scale) for i in range(xmin.shape[0])]
-    g = [torch.linspace(xmin[i], xmax[i], scaled_img_shape[i], device=model.device) for i in range(xmin.shape[0])]
-    g = torch.stack(torch.meshgrid(g, indexing='ij'), dim=-1).flatten(0, -2)
-    current_t = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    run_name = model.__class__.__name__+"_"+img_name.split('.')[0]+"_"+current_t
-    writer = SummaryWriter(f"./runs/{run_name}")
+    if(args['save_name'] is None):
+        current_t = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        save_name = img_name.split('.')[0]+"_"+current_t
+    else:
+        save_name = args['save_name']
+
+    
+    model = PeriodicPrimitives2D(device=device, n_channels=args['n_outputs'], 
+                                 gaussian_only=only_gaussians, total_iters=total_iters,
+                                 max_frequency=args['max_frequency'],
+                                 num_frequencies=args['num_frequencies'])
+    data = ImageDataset(args['data'], batch_size=batch_size, device=device)
+    n_extracted_peaks = model.add_primitives(starting_primitives)
+    
+    writer = SummaryWriter(f"./runs/{save_name}")
     t = tqdm(range(total_iters))
     with torch.profiler.profile(
         activities=[
@@ -104,23 +187,22 @@ if __name__ == '__main__':
             warmup=10,
             active=10,
             repeat=1),
-        on_trace_ready=torch.profiler.tensorboard_trace_handler(f"./runs/traces/{run_name}"),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(f"./runs/traces/{save_name}"),
             record_shapes=True,
             profile_memory=True,
             with_stack=True,
 
     ) as prof:
         for i in t:
-            
+            x, y = data[i]
             # image logging
             if i % 1000 == 0 and i > 0:
-                log_imgs(writer, model, g, scaled_img_shape, i)
+                log_imgs(writer, model, data.training_preview_positions, data.training_preview_img_shape, i)
             # histogram logging
             if i % 1000 == 0 and i > 0:
                 log_frequencies(writer, model, i)
 
             model.update_learning_rate(i)
-            mask = torch.rand(x.shape[0], device=x.device, dtype=torch.float32) < pct_of_data
 
             # Prune primitives
             if i % prune_every == 0 and i > 0 and prune_every > 0:
@@ -148,7 +230,7 @@ if __name__ == '__main__':
                     model.gaussian_colors *= 0.001
             
             model.optimizer.zero_grad()
-            losses, model_out = model.loss(x[mask], y[mask])
+            losses, model_out = model.loss(x, y)
             losses['final_loss'].backward()
             with torch.no_grad():
                 model.cumulative_gradients *= 0.95
@@ -163,22 +245,27 @@ if __name__ == '__main__':
             prof.step()
 
     with torch.no_grad():
-        output = torch.empty([x.shape[0], model.n_channels], dtype=torch.float32, device=model.device)
+        output = torch.empty([data.x.shape[0], model.n_channels], dtype=torch.float32, device=model.device)
         max_batch = int((2**28) / 256.)
-        for i in range(0, x.shape[0], max_batch):
+        for i in range(0, data.x.shape[0], max_batch):
             end = min(output.shape[0], i+max_batch)
-            output[i:end] = model(x[i:end])
-        final_im = to_img(output.reshape(og_img_shape))
+            output[i:end] = model(data.x[i:end])
+        final_im = to_img(output.reshape(data.og_img_shape))
         print(final_im.shape)
-        imageio.imwrite(os.path.join("./output", run_name+".jpg"), final_im)
-        #writer.add_image("Final image", final_im)
-        p = psnr(output,y).item()
+        imageio.imwrite(os.path.join("./output", save_name+".jpg"), final_im)
+        
+        p = psnr(output,data.y).item()
+        ssim_func = ssim(data_range=1.0).to(model.device)
+        s = ssim_func(output.reshape(data.og_img_shape).permute(2,0,1)[None,...], 
+                      data.y.reshape(data.og_img_shape).permute(2,0,1)[None,...])
+
         print(f"Final PSNR: {p:0.02f}")
+        print(f"Final SSIM: {s:0.04f}")
         writer.add_scalar("Params vs. PSNR", 
                         p, model.param_count())
         writer.add_scalar("Effective params vs. PSNR", 
                         p, model.effective_param_count())
     writer.flush()
     writer.close()
-    model.save(os.path.join("./savedModels", run_name+".ckpt"))
+    model.save(os.path.join("./savedModels", save_name+".ckpt"))
     

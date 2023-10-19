@@ -20,11 +20,11 @@ torch.backends.cudnn.allow_tf32 = True
 torch.manual_seed(7)
 
 test_iters = 10
-num_primitives = 50000#2**20
-num_points = 2**17
+num_primitives = 1#50000#2**20
+num_points = 1#2**17
 num_dimensions = 2
 
-hp = PeriodicPrimitives2D(gaussian_only=True)
+hp = PeriodicPrimitives2D(gaussian_only=False)
 hp.add_primitives_random(num_primitives)
 
 
