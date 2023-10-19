@@ -266,9 +266,9 @@ __global__ void periodic_primitives_forward_cuda_kernel(
                 }            
                 if(!gaussian_only) g *= w;
                 if(heatmap){
-                    temp_result.x += g;
-                    temp_result.y += g;
-                    temp_result.z += g;
+                    temp_result.x += fabsf(g);
+                    temp_result.y += fabsf(g);
+                    temp_result.z += fabsf(g);
                 }
                 else{
                     temp_result.x += g*gaussian_colors[j][0];
