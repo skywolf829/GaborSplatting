@@ -7,6 +7,7 @@ print("Successfully loaded HybridPrimitives.")
 from utils.data_generators import load_img
 import torch
 from torchmetrics.image import StructuralSimilarityIndexMeasure as ssim
+from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity as lpips
 import matplotlib.pyplot as plt
 import numpy as np
 import argparse
@@ -89,9 +90,9 @@ class ImageDataset(torch.utils.data.Dataset):
         xmin = self.x.min(dim=0).values
         xmax = self.x.max(dim=0).values
 
-        img_scale = max_img_reconstruction_dim_size/max(img_shape)
+        img_scale = min(max_img_reconstruction_dim_size, max(img_shape))/max(img_shape)
         self.training_preview_img_shape = [int(img_shape[i]*img_scale) for i in range(xmin.shape[0])]
-        g = [torch.linspace(xmin[i], xmax[i], self.training_preview_img_shape[i], device=model.device) for i in range(xmin.shape[0])]
+        g = [torch.linspace(xmin[i], xmax[i], self.training_preview_img_shape[i], device=self.device) for i in range(xmin.shape[0])]
         self.training_preview_positions = torch.stack(torch.meshgrid(g, indexing='ij'), dim=-1).flatten(0, -2)
 
         self.training_samples = torch.rand(len(self), device=self.device)
@@ -127,6 +128,10 @@ if __name__ == '__main__':
         help='Maximum frequency for a primitive.') 
     parser.add_argument('--num_frequencies',default=128,type=int,
         help='Total number of frequencies per primitive.') 
+    parser.add_argument('--num_top_frequencies',default=4,type=int,
+        help='Num top frequencies used in model.') 
+    parser.add_argument('--num_random_frequencies',default=0,type=int,
+        help='Num random frequencies used in model.') 
     parser.add_argument('--data',default=None,type=str,
         help='Data file name')
     parser.add_argument('--save_name',default=None,type=str,
@@ -168,11 +173,16 @@ if __name__ == '__main__':
         save_name = args['save_name']
 
     
+    data = ImageDataset(args['data'], batch_size=batch_size, device=device)
+    min_radius = 8*max(data.og_img_shape[0], data.og_img_shape[1])
     model = PeriodicPrimitives2D(device=device, n_channels=args['n_outputs'], 
                                  gaussian_only=only_gaussians, total_iters=total_iters,
                                  max_frequency=args['max_frequency'],
-                                 num_frequencies=args['num_frequencies'])
-    data = ImageDataset(args['data'], batch_size=batch_size, device=device)
+                                 num_frequencies=args['num_frequencies'],
+                                 num_top_freqs=args['num_top_frequencies'],
+                                 num_random_freqs=args['num_random_frequencies'],
+                                 )
+
     n_extracted_peaks = model.add_primitives(starting_primitives)
     
     writer = SummaryWriter(f"./runs/{save_name}")
@@ -207,7 +217,8 @@ if __name__ == '__main__':
             # Prune primitives
             if i % prune_every == 0 and i > 0 and prune_every > 0:
                 with torch.no_grad():
-                    prims_removed = model.prune_primitives(1./500.)
+                    prims_removed = model.prune_primitives(min_contribution=1./1000., 
+                                                           min_width=min_radius)
                     writer.add_scalar("Primitives pruned", prims_removed, i)
 
             # split primitives
@@ -256,11 +267,14 @@ if __name__ == '__main__':
         
         p = psnr(output,data.y).item()
         ssim_func = ssim(data_range=1.0).to(model.device)
+        lpips_func = lpips().to(model.device)
         s = ssim_func(output.reshape(data.og_img_shape).permute(2,0,1)[None,...], 
                       data.y.reshape(data.og_img_shape).permute(2,0,1)[None,...])
-
+        l = lpips_func(output.reshape(data.og_img_shape).permute(2,0,1)[None,...], 
+                      data.y.reshape(data.og_img_shape).permute(2,0,1)[None,...])
         print(f"Final PSNR: {p:0.02f}")
         print(f"Final SSIM: {s:0.04f}")
+        print(f"Final LPIPS: {l:0.04f}")
         writer.add_scalar("Params vs. PSNR", 
                         p, model.param_count())
         writer.add_scalar("Effective params vs. PSNR", 
