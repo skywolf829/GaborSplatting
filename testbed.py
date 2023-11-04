@@ -475,4 +475,34 @@ def thing16():
      imageio.imwrite("rotated_fft.gif", fourier_imgs)
      #imageio.imwrite("PSD.png", ((PSD_rows/PSD_rows.max())*255).astype(np.uint8))
 
-thing16()
+
+def thing17():
+     
+     mean = np.random.rand(2)
+     scale = np.random.rand(2)
+     rot = np.random.rand(1)*2*np.pi
+
+     r = (np.sqrt(2)**2/np.exp(scale.min()))
+
+     x = np.linspace(mean[0]-r, mean[0]+r, 1024)
+     y = np.linspace(mean[1]-r, mean[1]+r, 1024)
+     g = np.stack(np.meshgrid(x,y, indexing='ij'), axis=-1)
+     print(r)
+     print(scale)
+     g -= mean
+     tx = np.stack([np.exp(scale[0])*(g[:,:,0]*np.cos(rot) + g[:,:,1]*np.sin(rot)),
+                    np.exp(scale[1])*(g[:,:,0]*-np.sin(rot) + g[:,:,1]*np.cos(rot))], axis=1)
+     g = np.exp(-((0.0*np.abs(tx) + 0.5*(tx**10)).sum(axis=1)**(1/10)))
+
+     wave_freqs = 128*np.random.rand(4)
+     print(wave_freqs)
+     wave_coeffs = 2*np.random.rand(4)-1
+     w = np.zeros_like(g)
+     for i in range(wave_freqs.shape[0]):
+          w += wave_coeffs[i]*np.cos((1-g) * (wave_freqs[i]))
+     g *= w
+     plt.imshow(g, extent=[x.min(), x.max(), y.min(), y.max()])
+     
+     plt.show()
+
+thing17()
