@@ -13,6 +13,8 @@ from tqdm import tqdm
 from utils.data_utils import to_img, psnr
 import time
 from torch.utils.tensorboard import SummaryWriter
+from torch.profiler import profile, record_function, ProfilerActivity
+
 from datetime import datetime
 import os
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
@@ -51,19 +53,38 @@ def zoom_test_density(model, res, start_rect, end_rect, num_frames=128):
             imgs.append(to_img(out))
     return imgs
 
+def throughout_test(model, batch_size=2**20, num_iters=50):
+    with torch.no_grad():
+        model.train(False)
+        x = torch.rand([batch_size, model.num_dimensions], dtype=torch.float32, device=model.device)
+        t0 = time.time()
+        for i in range(num_iters):
+            model(x)
+        t1 = time.time()
+        elapsed = t1-t0
+    
+    print(f"Throughput: {num_iters*batch_size / elapsed} points per second")
+
+def profiler_test(model):
+    x = torch.rand([2**20, model.num_dimensions], dtype=torch.float32, device=model.device)
+    with profile(activities=[
+        ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, with_stack=True) as prof:
+        y = model.forward(x)
+    print(prof.key_averages(group_by_input_shape=True).table(sort_by="self_cuda_time_total", row_limit=10))
+
+
 if __name__ == '__main__':
     
     torch.random.manual_seed(42)
     np.random.seed(42)
 
     model = PeriodicPrimitives2D()
-    img_name = "truck.jpg"
+    img_name = "pluto.png"
     device = "cuda"
     training_img = load_img("./data/"+img_name)
     img_shape = list(training_img.shape)[0:2]
 
-    #model_name = "PeriodicPrimitives2D_truck2023-10-12_13-27-53" # gaussians
-    model_name = "PeriodicPrimitives2D_truck_2023-10-12_14-41-48" # periodic primitives
+    model_name = "pluto_330000_waves"
 
     model.load(f"./savedModels/{model_name}.ckpt")
 
@@ -80,6 +101,9 @@ if __name__ == '__main__':
     g = [torch.linspace(xmin[i], xmax[i], img_shape[i], device=model.device) for i in range(xmin.shape[0])]
     g = torch.stack(torch.meshgrid(g, indexing='ij'), dim=-1).flatten(0, -2)
     
+    profiler_test(model)
+    throughout_test(model)
+    '''
     start = [xmin[0], xmax[0], xmin[1], xmax[1]]
     #end = [0.15, 0.25, 0.85, 0.95]
     end = [0.45, 0.55, 0.45, 0.55]
@@ -89,3 +113,4 @@ if __name__ == '__main__':
 
     imgs = zoom_test_density(model, img_shape, start, end)
     imageio.imwrite(os.path.join("./output", f"{model_name}_zoom_density.gif"), imgs)
+    '''

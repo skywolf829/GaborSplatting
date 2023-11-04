@@ -262,7 +262,9 @@ __global__ void periodic_primitives_forward_cuda_kernel(
                 float w = 0.0f;
                 for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES && !gaussian_only; w_idx++){
                     float f = max_frequency*(coefficient_indices[j][w_idx])/(float)TOTAL_NUM_FREQUENCIES;
-                    w += coefficients[j][w_idx]*__cosf(f*(1-g));
+                    // old (radial)
+                    //w += coefficients[j][w_idx]*__cosf(f*(1-g));
+                    w += coefficients[j][w_idx]*__cosf(f*tx.x);
                 }            
                 if(!gaussian_only) g *= w;
                 if(heatmap){
@@ -380,17 +382,27 @@ __global__ void periodic_primitives_backward_cuda_kernel(
                 float w = 0.0f;
                 for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES && !gaussian_only; w_idx++){
                     float f = max_frequency*(coeff_index[w_idx])/(float)TOTAL_NUM_FREQUENCIES;
-                    w += coeff[w_idx]*__cosf(f*(1-g));
-
-                    dCoefficients_temp[w_idx] += color_contribution*g*__cosf(f*(1-g));
-
+                    // old radial
+                    // w += coeff[w_idx]*__cosf(f*(1-g));
+                    // dCoefficients_temp[w_idx] += color_contribution*g*__cosf(f*(1-g));                    
+                    /*
                     float deriv_coeff = color_contribution*g*coeff[w_idx]*__sinf(f*(1-g))*f;
                     dPosition_temp.x += deriv_coeff*g*-(-tx.x*s.x*cosr - tx.y*s.y*-sinr);
                     dPosition_temp.y += deriv_coeff*g*-(-tx.x*s.x*sinr - tx.y*s.y*cosr);
                     dScale_temp.x += deriv_coeff*tx.x*g*-(dx.x*cosr  + dx.y*sinr);
                     dScale_temp.y += deriv_coeff*tx.y*g*-(dx.x*-sinr+dx.y*cosr);
                     dRotation_temp += deriv_coeff*g*-(tx.x*(s.x*dx.x*-sinr+s.x*dx.y*cosr) 
-                                                    + tx.y*(s.y*dx.x*-cosr + s.y*dx.y*-sinr)); 
+                                                    + tx.y*(s.y*dx.x*-cosr + s.y*dx.y*-sinr)); */
+
+                    w += coeff[w_idx]*__cosf(f*tx.x);
+                    dCoefficients_temp[w_idx] += color_contribution*g*__cosf(f*tx.x);
+
+                    
+                    float deriv_coeff = color_contribution*g*coeff[w_idx]*-__sinf(f*tx.x)*f;
+                    dPosition_temp.x += deriv_coeff*-(s.x*cosr);
+                    dPosition_temp.y += deriv_coeff*-(s.x*sinr);                    
+                    dScale_temp.x += deriv_coeff*(dx.x*cosr  + dx.y*sinr);
+                    dRotation_temp += deriv_coeff*(s.x*(dx.x*-sinr  + dx.y*cosr)); 
                 }       
 
                 float shared_coeff = color_contribution*g;
