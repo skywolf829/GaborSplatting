@@ -309,6 +309,8 @@ def generate_2D_random_peroidic_data_hardest_square(resolution=512, extents=[-5,
     return x, y
 
 def load_img(path):
+    import PIL.Image
+    PIL.Image.MAX_IMAGE_PIXELS = 933120000
     img = imageio.imread(path).astype(np.float32)/ 255.0
     #if(len(img.shape) == 3):
     #    img = img[:,:,0] 

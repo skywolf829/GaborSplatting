@@ -15,9 +15,17 @@ import time
 from torch.utils.tensorboard import SummaryWriter
 from torch.profiler import profile, record_function, ProfilerActivity
 
+from datasets.datasets import create_dataset
+from models.models import create_model, load_model
+from models.options import Options, load_options, save_options, update_options_from_args
 from datetime import datetime
 import os
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
+
+project_folder_path = os.path.dirname(os.path.abspath(__file__))
+data_folder = os.path.join(project_folder_path, "data")
+output_folder = os.path.join(project_folder_path, "output")
+save_folder = os.path.join(project_folder_path, "savedModels")
 
 def zoom_test(model, res, start_rect, end_rect, num_frames=128):
     print("Zoom test")
@@ -56,7 +64,7 @@ def zoom_test_density(model, res, start_rect, end_rect, num_frames=128):
 def throughout_test(model, batch_size=2**20, num_iters=50):
     with torch.no_grad():
         model.train(False)
-        x = torch.rand([batch_size, model.num_dimensions], dtype=torch.float32, device=model.device)
+        x = torch.rand([batch_size, model.opt['num_dims']], dtype=torch.float32, device=model.opt['device'])
         t0 = time.time()
         for i in range(num_iters):
             model(x)
@@ -66,7 +74,7 @@ def throughout_test(model, batch_size=2**20, num_iters=50):
     print(f"Throughput: {num_iters*batch_size / elapsed} points per second")
 
 def profiler_test(model):
-    x = torch.rand([2**20, model.num_dimensions], dtype=torch.float32, device=model.device)
+    x = torch.rand([2**20, model.opt['num_dims']], dtype=torch.float32, device=model.opt['device'])
     with profile(activities=[
         ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True, with_stack=True) as prof:
         y = model.forward(x)
@@ -78,15 +86,16 @@ if __name__ == '__main__':
     torch.random.manual_seed(42)
     np.random.seed(42)
 
-    model = PeriodicPrimitives2D()
     img_name = "pluto.png"
     device = "cuda"
-    training_img = load_img("./data/"+img_name)
+    training_img = load_img(os.path.join(data_folder, img_name))
     img_shape = list(training_img.shape)[0:2]
 
-    model_name = "pluto_330000_waves"
-
-    model.load(f"./savedModels/{model_name}.ckpt")
+    model_name = "pluto_1000000_gaussians"
+    opt = load_options(os.path.join(save_folder, 
+                       model_name))
+    dataset = create_dataset(opt)
+    model = load_model(opt)
 
     g_x = torch.arange(0, img_shape[0], dtype=torch.float32, device=device) / (img_shape[0]-1)
     g_y = torch.arange(0, img_shape[1], dtype=torch.float32, device=device) / (img_shape[1]-1)
@@ -98,7 +107,7 @@ if __name__ == '__main__':
 
     xmin = x.min(dim=0).values
     xmax = x.max(dim=0).values
-    g = [torch.linspace(xmin[i], xmax[i], img_shape[i], device=model.device) for i in range(xmin.shape[0])]
+    g = [torch.linspace(xmin[i], xmax[i], img_shape[i], device=device) for i in range(xmin.shape[0])]
     g = torch.stack(torch.meshgrid(g, indexing='ij'), dim=-1).flatten(0, -2)
     
     profiler_test(model)

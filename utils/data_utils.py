@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import warnings
 from skimage.metrics import structural_similarity
 import torch
-
+import argparse
 
 def smooth_signal(sig, window_size=7):
     gauss_kernel = np.exp(-(np.linspace(-2, 2, window_size)**2)/2.)/np.sqrt(np.pi*2)
@@ -140,3 +140,14 @@ def hsl2rgb_torch(hsl: torch.Tensor) -> torch.Tensor:
     rgb[idx == 5] = torch.cat([_c, _o, _x], dim=1)[idx == 5]
     rgb += _m
     return rgb
+
+def str2bool(v):
+    if isinstance(v, bool):
+       return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+    

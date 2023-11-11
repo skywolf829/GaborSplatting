@@ -4,28 +4,28 @@
 // CUDA forward declarations
 
 std::vector<torch::Tensor> hybrid_model_forward_cuda(
-    torch::Tensor input,                // [N, n_dim]
-    torch::Tensor gaussian_colors,      // [M, n_chan]
-    torch::Tensor gaussian_means,       // [M, n_dim]
-    torch::Tensor gaussian_mats,        // [M, n_dim, n_dim]
-    torch::Tensor wave_colors,          // [W, n_chan]
-    torch::Tensor wave_means,           // [W, n_dim]
-    torch::Tensor wave_mats,            // [W, n_dim, n_dim]
-    torch::Tensor wave_frequencies,     // [W, n_dim]
-    torch::Tensor wave_coefficients     // [W, 5]
+    const torch::Tensor& input,                // [N, n_dim]
+    const torch::Tensor& gaussian_colors,      // [M, n_chan]
+    const torch::Tensor& gaussian_means,       // [M, n_dim]
+    const torch::Tensor& gaussian_mats,        // [M, n_dim, n_dim]
+    const torch::Tensor& wave_colors,          // [W, n_chan]
+    const torch::Tensor& wave_means,           // [W, n_dim]
+    const torch::Tensor& wave_mats,            // [W, n_dim, n_dim]
+    const torch::Tensor& wave_frequencies,     // [W, n_dim]
+    const torch::Tensor& wave_coefficients     // [W, 5]
 );
 
 std::vector<torch::Tensor> hybrid_model_backward_cuda(
-    torch::Tensor grad_output,          // [N, n_chan]
-    torch::Tensor input,                // [N, n_dim]
-    torch::Tensor gaussian_colors,      // [M, n_chan]
-    torch::Tensor gaussian_means,       // [M, n_dim]
-    torch::Tensor gaussian_mats,        // [M, n_dim, n_dim]
-    torch::Tensor wave_colors,          // [W, n_chan]
-    torch::Tensor wave_means,           // [W, n_dim]
-    torch::Tensor wave_mats,            // [W, n_dim, n_dim]
-    torch::Tensor wave_frequencies,     // [W, n_dim]
-    torch::Tensor wave_coefficients     // [W, 5]
+    const torch::Tensor& grad_output,          // [N, n_chan]
+    const torch::Tensor& input,                // [N, n_dim]
+    const torch::Tensor& gaussian_colors,      // [M, n_chan]
+    const torch::Tensor& gaussian_means,       // [M, n_dim]
+    const torch::Tensor& gaussian_mats,        // [M, n_dim, n_dim]
+    const torch::Tensor& wave_colors,          // [W, n_chan]
+    const torch::Tensor& wave_means,           // [W, n_dim]
+    const torch::Tensor& wave_mats,            // [W, n_dim, n_dim]
+    const torch::Tensor& wave_frequencies,     // [W, n_dim]
+    const torch::Tensor& wave_coefficients     // [W, 5]
     );        
 
 // C++ interface
@@ -35,15 +35,15 @@ std::vector<torch::Tensor> hybrid_model_backward_cuda(
 #define CHECK_INPUT(x) CHECK_CUDA(x); CHECK_CONTIGUOUS(x)
 
 std::vector<torch::Tensor> hybrid_model_forward(
-    torch::Tensor input,                // [N, n_dims]
-    torch::Tensor gaussian_colors,      // [M, n_chans]
-    torch::Tensor gaussian_means,       // [M, n_dims]
-    torch::Tensor gaussian_mats,        // [M, n_dims, n_dims]
-    torch::Tensor wave_colors,          // [W, n_chans]
-    torch::Tensor wave_means,           // [W, n_dims]
-    torch::Tensor wave_mats,            // [W, n_dims, n_dims]
-    torch::Tensor wave_frequencies,     // [W, n_dims]
-    torch::Tensor wave_coefficients     // [W, 5]
+    const torch::Tensor& input,                // [N, n_dims]
+    const torch::Tensor& gaussian_colors,      // [M, n_chans]
+    const torch::Tensor& gaussian_means,       // [M, n_dims]
+    const torch::Tensor& gaussian_mats,        // [M, n_dims, n_dims]
+    const torch::Tensor& wave_colors,          // [W, n_chans]
+    const torch::Tensor& wave_means,           // [W, n_dims]
+    const torch::Tensor& wave_mats,            // [W, n_dims, n_dims]
+    const torch::Tensor& wave_frequencies,     // [W, n_dims]
+    const torch::Tensor& wave_coefficients     // [W, 5]
     ) {
     CHECK_INPUT(input);
     CHECK_INPUT(gaussian_means);
@@ -69,16 +69,16 @@ std::vector<torch::Tensor> hybrid_model_forward(
 
 
 std::vector<torch::Tensor> hybrid_model_backward(
-    torch::Tensor grad_output,          // [N, n_chans]
-    torch::Tensor input,                // [N, n_dims]
-    torch::Tensor gaussian_colors,      // [M, n_chans]
-    torch::Tensor gaussian_means,       // [M, n_dims]
-    torch::Tensor gaussian_mats,        // [M, n_dims, n_dims]
-    torch::Tensor wave_colors,          // [W, n_chans]
-    torch::Tensor wave_means,           // [W, n_dims]
-    torch::Tensor wave_mats,            // [W, n_dims, n_dims]
-    torch::Tensor wave_frequencies,     // [W, n_dims]
-    torch::Tensor wave_coefficients     // [W, 5]
+    const torch::Tensor& grad_output,          // [N, n_chans]
+    const torch::Tensor& input,                // [N, n_dims]
+    const torch::Tensor& gaussian_colors,      // [M, n_chans]
+    const torch::Tensor& gaussian_means,       // [M, n_dims]
+    const torch::Tensor& gaussian_mats,        // [M, n_dims, n_dims]
+    const torch::Tensor& wave_colors,          // [W, n_chans]
+    const torch::Tensor& wave_means,           // [W, n_dims]
+    const torch::Tensor& wave_mats,            // [W, n_dims, n_dims]
+    const torch::Tensor& wave_frequencies,     // [W, n_dims]
+    const torch::Tensor& wave_coefficients     // [W, 5]
     ) {
     CHECK_INPUT(grad_output);
     CHECK_INPUT(input);

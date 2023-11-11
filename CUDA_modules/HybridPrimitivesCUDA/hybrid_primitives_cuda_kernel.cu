@@ -309,15 +309,15 @@ namespace{
 }
 
 std::vector<torch::Tensor> hybrid_model_forward_cuda(
-    torch::Tensor input,                // [N, n_dims]
-    torch::Tensor gaussian_colors,      // [M, n_chans]
-    torch::Tensor gaussian_means,       // [M, n_dims]
-    torch::Tensor gaussian_mats,        // [M, n_dims, n_dims]
-    torch::Tensor wave_colors,          // [W, n_chans]
-    torch::Tensor wave_means,           // [W, n_dims]
-    torch::Tensor wave_mats,            // [W, n_dims, n_dims]
-    torch::Tensor wave_frequencies,     // [W, n_dims]
-    torch::Tensor wave_coefficients     // [W, 5]
+    const torch::Tensor& input,                // [N, n_dims]
+    const torch::Tensor& gaussian_colors,      // [M, n_chans]
+    const torch::Tensor& gaussian_means,       // [M, n_dims]
+    const torch::Tensor& gaussian_mats,        // [M, n_dims, n_dims]
+    const torch::Tensor& wave_colors,          // [W, n_chans]
+    const torch::Tensor& wave_means,           // [W, n_dims]
+    const torch::Tensor& wave_mats,            // [W, n_dims, n_dims]
+    const torch::Tensor& wave_frequencies,     // [W, n_dims]
+    const torch::Tensor& wave_coefficients     // [W, 5]
     ) {
 
     // Get sizes for the output
@@ -355,16 +355,16 @@ std::vector<torch::Tensor> hybrid_model_forward_cuda(
 
 
 std::vector<torch::Tensor> hybrid_model_backward_cuda(
-    torch::Tensor grad_output,          // [N, n_chans]
-    torch::Tensor input,                // [N, n_dims]
-    torch::Tensor gaussian_colors,      // [M, n_chans]
-    torch::Tensor gaussian_means,       // [M, n_dims]
-    torch::Tensor gaussian_mats,        // [M, n_dims, n_dims]
-    torch::Tensor wave_colors,          // [W, n_chans]
-    torch::Tensor wave_means,           // [W, n_dims]
-    torch::Tensor wave_mats,            // [W, n_dims, n_dims]
-    torch::Tensor wave_frequencies,     // [W, n_dims]
-    torch::Tensor wave_coefficients     // [W, 5]
+    const torch::Tensor& grad_output,          // [N, n_chans]
+    const torch::Tensor& input,                // [N, n_dims]
+    const torch::Tensor& gaussian_colors,      // [M, n_chans]
+    const torch::Tensor& gaussian_means,       // [M, n_dims]
+    const torch::Tensor& gaussian_mats,        // [M, n_dims, n_dims]
+    const torch::Tensor& wave_colors,          // [W, n_chans]
+    const torch::Tensor& wave_means,           // [W, n_dims]
+    const torch::Tensor& wave_mats,            // [W, n_dims, n_dims]
+    const torch::Tensor& wave_frequencies,     // [W, n_dims]
+    const torch::Tensor& wave_coefficients     // [W, 5]
     ) {
         // Info for launching CUDA kernel
         const int batch_size = input.size(0);
