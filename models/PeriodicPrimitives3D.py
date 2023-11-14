@@ -6,9 +6,9 @@ import numpy as np
 
 periodic_primitives = load(name='periodic_primitives', 
     sources=[os.path.join(os.sep.join(__file__.split(os.sep)[0:-1]),"..", "CUDA_Modules", 
-                            "PeriodicPrimitivesCUDA", 'periodic_primitives2DRGB_cuda.cpp'), 
+                            "PeriodicPrimitives3D", 'periodic_primitives.cpp'), 
             os.path.join(os.sep.join(__file__.split(os.sep)[0:-1]),"..", "CUDA_Modules", 
-                            "PeriodicPrimitivesCUDA", 'periodic_primitives2DRGB_cuda_kernel.cu')], verbose=False)
+                            "PeriodicPrimitives3D", 'periodic_primitives_cuda_kernel.cu')], verbose=False)
 
 def get_expon_lr_func(
     lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
@@ -48,59 +48,54 @@ def get_expon_lr_func(
 
 class PeriodicPrimitivesFunction(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, x, gaussian_colors, 
-                gaussian_positions, gaussian_scales,
-                gaussian_rotations, topk_wave_coefficients,
-                topk_wave_indices,
-                num_top_frequencies, num_random_frequencies,
-                max_frequency, gaussian_only, heatmap=False):
+    def forward(ctx, colors, opacities, background_color,
+                positions, scales, scale_modifier,
+                rotations, 
+                topk_wave_coefficients, topk_wave_indices,
+                max_frequency, 
+                cam_position, view_matrix, proj_matrix,
+                fov_x, fov_y, 
+                image_width, image_height,
+                gaussian_only, heatmap=False):
         """
         In the forward pass we receive a Tensor containing the input and return
         a Tensor containing the output. ctx is a context object that can be used
         to stash information for backward computation. You can cache arbitrary
         objects for use in the backward pass using the ctx.save_for_backward method.
         """
+        outputs = periodic_primitives.forward(colors, 
+                opacities, background_color,
+                positions, scales, scale_modifier,
+                rotations, 
+                topk_wave_coefficients, topk_wave_indices,
+                max_frequency, 
+                cam_position, view_matrix, proj_matrix,
+                fov_x, fov_y, 
+                image_width, image_height,
+                gaussian_only, heatmap)
         
-        outputs = periodic_primitives.forward(x, 
-            gaussian_colors, gaussian_positions, gaussian_scales,
-            gaussian_rotations, topk_wave_coefficients, topk_wave_indices, 
-            max_frequency, gaussian_only, heatmap)
-        
-        result, sorted_gaussian_indices_tensor, \
-        blocks_gaussian_start_end_indices_tensor, \
-        sorted_query_point_indices, blocks_query_points_start_end_indices_tensor = outputs
-
-        variables = [x, gaussian_colors, gaussian_positions, 
-                    gaussian_scales, gaussian_rotations,
-                    topk_wave_coefficients, topk_wave_indices, 
-                    sorted_gaussian_indices_tensor, 
-                    blocks_gaussian_start_end_indices_tensor, 
-                    sorted_query_point_indices, 
-                    blocks_query_points_start_end_indices_tensor]
+        result, final_T, num_contributors = outputs
+        """
+        variables = [colors, 
+                opacities, background_color,
+                positions, scales, 
+                rotations, 
+                topk_wave_coefficients, topk_wave_indices,
+                cam_position, view_matrix, proj_matrix]
         
         ctx.save_for_backward(*variables)
         ctx.max_frequency = max_frequency
+        ctx.fov_x = fov_x
+        ctx.fov_y = fov_y
+        ctx.scale_modifier = scale_modifier
+        ctx.image_width = image_width
+        ctx.image_height = image_height
         ctx.gaussian_only = gaussian_only
+        ctx.sorted_primitive_indices = sorted_primitives_indices
+        ctx.blocks_start_end_indices = blocks_start_end_indices
+        """
         return result
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        """
-        In the backward pass we receive a Tensor containing the gradient of the loss
-        with respect to the output, and we need to compute the gradient of the loss
-        with respect to the input.
-        """
-        outputs = periodic_primitives.backward(grad_output, *ctx.saved_tensors, 
-                                               ctx.max_frequency, ctx.gaussian_only)
-        
-        grad_gaussian_colors, grad_gaussian_positions, grad_gaussian_scales, \
-            grad_gaussian_rotations, grad_wave_coefficients = outputs
-        #for t in ctx.saved_tensors:
-        #    del t
-        return grad_output, grad_gaussian_colors, grad_gaussian_positions, \
-              grad_gaussian_scales, grad_gaussian_rotations, grad_wave_coefficients, \
-              None, None, None, None, None, None
-
+    
 
 class PeriodicPrimitives3D(torch.nn.Module):
     def __init__(self, opt):
@@ -108,13 +103,18 @@ class PeriodicPrimitives3D(torch.nn.Module):
         device = opt['device']
         self.opt = opt
 
-        self.gaussian_colors = Parameter(torch.empty([0, opt['num_outputs']], device=device, dtype=torch.float32)) 
-        self.gaussian_positions = Parameter(torch.empty([0, opt['num_dims']], device=device, dtype=torch.float32))  
-        self.gaussian_scales = Parameter(torch.empty([0, opt['num_dims']], device=device, dtype=torch.float32))    
-        self.gaussian_rotations = Parameter(torch.empty([0, 1], device=device, dtype=torch.float32))      
+        self.primitive_alphas = Parameter(torch.empty([0, 1], device=device, dtype=torch.float32)) 
+        self.primitive_colors = Parameter(torch.empty([0, 3], device=device, dtype=torch.float32)) 
+        self.primitive_positions = Parameter(torch.empty([0, 3], device=device, dtype=torch.float32))  
+        self.primitive_scales = Parameter(torch.empty([0, 3], device=device, dtype=torch.float32))    
+        self.primitive_rotations = Parameter(torch.empty([0, 4], device=device, dtype=torch.float32))      
         self.wave_coefficients = Parameter(torch.empty([0, opt['num_total_frequencies']], device=device, dtype=torch.float32))
         
         self.optimizer = self.create_optimizer()
+        
+        self.alpha_scheduler = get_expon_lr_func(lr_init=0.0001,
+                                                    lr_final=0.0001,
+                                                    max_steps=opt['train_iterations'])
         self.position_scheduler = get_expon_lr_func(lr_init=0.001,
                                                     lr_final=0.00001,
                                                     max_steps=opt['train_iterations'])
@@ -136,10 +136,11 @@ class PeriodicPrimitives3D(torch.nn.Module):
 
     def create_optimizer(self):
         l = [
-            {'params': [self.gaussian_colors], 'lr': 0.005, "name": "gaussian_colors", "weight_decay": 0},
-            {'params': [self.gaussian_positions], 'lr': 0.005, "name": "gaussian_positions"},
-            {'params': [self.gaussian_scales], 'lr': 0.005, "name": "gaussian_scales"},
-            {'params': [self.gaussian_rotations], 'lr': 0.005, "name": "gaussian_rotations"},
+            {'params': [self.primitive_alphas], 'lr': 0.005, "name": "primitive_alphas", "weight_decay": 0},
+            {'params': [self.primitive_colors], 'lr': 0.005, "name": "primitive_colors", "weight_decay": 0},
+            {'params': [self.primitive_positions], 'lr': 0.005, "name": "primitive_positions"},
+            {'params': [self.primitive_scales], 'lr': 0.005, "name": "primitive_scales"},
+            {'params': [self.primitive_rotations], 'lr': 0.005, "name": "primitive_rotations"},
             {'params': [self.wave_coefficients], 'lr': 0.005, "name": "wave_coefficients"},
         ]
         optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15, betas=[0.9, 0.999])
@@ -150,6 +151,8 @@ class PeriodicPrimitives3D(torch.nn.Module):
         for param_group in self.optimizer.param_groups:
             if("positions" in param_group['name']):
                 param_group['lr'] = self.position_scheduler(iteration)
+            if("alpha" in param_group['name']):
+                param_group['lr'] = self.alpha_scheduler(iteration)
             if("scale" in param_group['name']):
                 param_group['lr'] = self.scale_scheduler(iteration)
             if("rotation" in param_group['name']):
@@ -163,71 +166,71 @@ class PeriodicPrimitives3D(torch.nn.Module):
     def param_count(self):
         total = 0
         for group in self.optimizer.param_groups:    
-            if(group['name'] == 'wave_coefficients' and not self.gaussian_only):
-                total += self.gaussian_colors.shape[0]*(self.num_top_freqs + self.num_random_freqs)
+            if(group['name'] == 'wave_coefficients' and not self.opt['gaussian_only']):
+                total += self.primitive_colors.shape[0]*(self.num_top_freqs + self.num_random_freqs)
             elif(group['name'] != 'wave_coefficients'):   
                 total += group['params'][0].numel()
         return total
     
     def effective_param_count(self):
-        total = 0
-        mult = 1.0
-        for group in self.optimizer.param_groups:    
-            if(group['name'] == 'wave_coefficients' and not self.gaussian_only):
-                top_k_coeffs, _ = self.get_topk_waves()
-                above_thresh = torch.abs(top_k_coeffs) > 1./1000.
-                total += above_thresh.sum()
-            if(group['name'] == "gaussian_colors"):
-                mult = self.gaussian_colors.norm(dim=-1) > 1/1000.
-                mult = mult.sum() / self.gaussian_colors.shape[0]
-
-            if(group['name'] != 'wave_coefficients'):   
-                total += group['params'][0].numel()
-        return total * mult
+        return self.param_count()
     
     def get_weighed_frequency_dist(self):
         top_k_coeffs, top_k_indices = self.get_topk_waves(with_random=False)
-        frequencies = top_k_indices*self.max_frequency / self.num_frequencies
+        frequencies = top_k_indices*self.opt['max_frequency'] / self.opt['num_total_frequencies']
         return frequencies.flatten(), top_k_coeffs.flatten()
 
-    def add_primitives_random(self, num_gaussians):
-        new_colors = 0.05*(torch.randn([num_gaussians, self.n_channels], 
-                dtype=torch.float32, device=self.device))
-        new_positions = torch.rand([num_gaussians, self.num_dimensions], 
-                dtype=torch.float32, device=self.device)
-        new_scales = 3 + torch.randn([num_gaussians, 1], 
-                dtype=torch.float32,  device=self.device).repeat(1, 2) + \
-                0.05*torch.randn([num_gaussians, 2], dtype=torch.float32,  device=self.device)
-        new_rotations = torch.pi*torch.rand([num_gaussians, 1],
-                dtype=torch.float32,  device=self.device)
-        if(not self.gaussian_only):
-            new_wave_coefficients = 0.01*(2*torch.rand([num_gaussians, self.num_frequencies],
-                    dtype=torch.float32,  device=self.device)-1) 
+    def add_primitives_random(self, num_primitives):
+        new_alphas = 0.8*torch.rand([num_primitives, 1], 
+                dtype=torch.float32, device=self.opt['device'])
+        new_colors = torch.rand([num_primitives, 3], 
+                dtype=torch.float32, device=self.opt['device'])        
+        new_positions = torch.rand([num_primitives, 3], 
+                dtype=torch.float32, device=self.opt['device'])
+        new_scales = -3 + torch.randn([num_primitives, 1], 
+                dtype=torch.float32,  device=self.opt['device']).repeat(1, 3) + \
+                0.05*torch.randn([num_primitives, 3], dtype=torch.float32,  device=self.opt['device'])
+        #https://stackoverflow.com/questions/31600717/how-to-generate-a-random-quaternion-quickly
+        # h = ( sqrt(1-u) sin(2πv), sqrt(1-u) cos(2πv), sqrt(u) sin(2πw), sqrt(u) cos(2πw))
+        u = torch.rand([num_primitives], device=self.opt['device'], dtype=torch.float32)
+        v = torch.rand([num_primitives], device=self.opt['device'], dtype=torch.float32)
+        w = torch.rand([num_primitives], device=self.opt['device'], dtype=torch.float32)
+        new_rotations = torch.stack([
+            ((1-u)**0.5)*torch.sin(2*torch.pi*v),
+            ((1-u)**0.5)*torch.cos(2*torch.pi*v),
+            (u**0.5)*torch.sin(2*torch.pi*w),
+            (u**0.5)*torch.cos(2*torch.pi*w)
+        ], dim = 1)
+        if(not self.opt['gaussian_only']):
+            new_wave_coefficients = 0.01*(2*torch.rand([num_primitives, self.opt['num_total_frequencies']],
+                    dtype=torch.float32,  device=self.opt['device'])-1) 
             #new_wave_coefficients[:,0] = 1.0
         else:
             new_wave_coefficients = None
 
         tensor_dict = {
-            "gaussian_colors": new_colors, 
-            "gaussian_positions": new_positions,
-            "gaussian_scales": new_scales,
-            "gaussian_rotations": new_rotations,
+            "primitive_alphas": new_alphas,
+            "primitive_colors": new_colors, 
+            "primitive_positions": new_positions,
+            "primitive_scales": new_scales,
+            "primitive_rotations": new_rotations,
             "wave_coefficients": new_wave_coefficients
         }
 
         updated_params = self.cat_tensors_to_optimizer(tensor_dict)
 
-        self.gaussian_colors = updated_params['gaussian_colors']
-        self.gaussian_positions = updated_params['gaussian_positions']
-        self.gaussian_scales = updated_params['gaussian_scales']
-        self.gaussian_rotations = updated_params['gaussian_rotations']
-        if(not self.gaussian_only):
+        self.primitive_alphas = updated_params['primitive_alphas']
+        self.primitive_colors = updated_params['primitive_colors']
+        self.primitive_positions = updated_params['primitive_positions']
+        self.primitive_scales = updated_params['primitive_scales']
+        self.primitive_rotations = updated_params['primitive_rotations']
+        if(not self.opt['gaussian_only']):
             self.wave_coefficients = updated_params['wave_coefficients']
         self.cumulative_gradients = torch.cat([self.cumulative_gradients, 
-            torch.empty([num_gaussians], device=self.device, dtype=torch.float32)])
+            torch.empty([num_primitives], device=self.opt['device'], dtype=torch.float32)])
 
     def get_num_primitives(self):
-        return self.gaussian_colors.shape[0]
+        return self.primitive_colors.shape[0]
     
     def add_primitives(self, num_primitives):
         self.add_primitives_random(num_primitives)
@@ -262,42 +265,43 @@ class PeriodicPrimitives3D(torch.nn.Module):
         new_prims = min(num_primitives, self.get_num_primitives())
         _, indices = torch.topk(self.cumulative_gradients, new_prims)
 
-        stds = 1/(2*torch.exp(self.gaussian_scales[indices].clone()))
+        stds = 1/(2*torch.exp(self.primitive_scales[indices].clone()))
         #stds = stds*stds
-        means = torch.zeros((stds.shape[0], 2), device=self.device, dtype=torch.float32)
+        means = torch.zeros((stds.shape[0], 3), device=self.opt['device'], dtype=torch.float32)
         samples = torch.normal(mean=means, std=stds)
-        new_rotations = self.gaussian_rotations[indices].clone()
-        rotated_samples = torch.stack([samples[:,0]*torch.cos(-new_rotations[:,0]) + samples[:,1]*torch.sin(-new_rotations[:,0]),
-                               samples[:,0]*-torch.sin(-new_rotations[:,0]) + samples[:,1]*torch.cos(-new_rotations[:,0])], dim=-1)
-        new_positions = self.gaussian_positions[indices].clone() + rotated_samples
-        new_colors = self.gaussian_colors[indices].clone() * 0.8
-        new_scales = self.gaussian_scales[indices].clone() + np.log(1.6)
-        if(not self.gaussian_only):
+        new_rotations = self.primitive_rotations[indices].clone()
+        #rotated_samples = torch.stack([samples[:,0]*torch.cos(-new_rotations[:,0]) + samples[:,1]*torch.sin(-new_rotations[:,0]),
+        #                       samples[:,0]*-torch.sin(-new_rotations[:,0]) + samples[:,1]*torch.cos(-new_rotations[:,0])], dim=-1)
+
+        new_positions = self.primitive_positions[indices].clone() + rotated_samples
+        new_colors = self.primitive_colors[indices].clone() * 0.8
+        new_scales = self.primitive_scales[indices].clone() + np.log(1.6)
+        if(not self.opt['gaussian_only']):
             new_wave_coefficients = self.wave_coefficients[indices].clone()
             #new_wave_coefficients[:,1:] *= 0.01
             #new_wave_coefficients[:,0] = 1.
         else:
             new_wave_coefficients = None
-        self.gaussian_scales[indices] += np.log(1.1)
-        self.gaussian_colors[indices] *= 0.9
+        self.primitive_scales[indices] += np.log(1.1)
+        self.primitive_colors[indices] *= 0.9
 
         tensor_dict = {
-            "gaussian_colors": new_colors, 
-            "gaussian_positions": new_positions,
-            "gaussian_scales": new_scales,
-            "gaussian_rotations": new_rotations,
+            "primitive_colors": new_colors, 
+            "primitive_positions": new_positions,
+            "primitive_scales": new_scales,
+            "primitive_rotations": new_rotations,
             "wave_coefficients": new_wave_coefficients
         }
         updated_params = self.cat_tensors_to_optimizer(tensor_dict)
 
-        self.gaussian_colors = updated_params['gaussian_colors']
-        self.gaussian_positions = updated_params['gaussian_positions']
-        self.gaussian_scales = updated_params['gaussian_scales']
-        self.gaussian_rotations = updated_params['gaussian_rotations']
-        if(not self.gaussian_only):
+        self.primitive_colors = updated_params['primitive_colors']
+        self.primitive_positions = updated_params['primitive_positions']
+        self.primitive_scales = updated_params['primitive_scales']
+        self.primitive_rotations = updated_params['primitive_rotations']
+        if(not self.opt['gaussian_only']):
             self.wave_coefficients = updated_params['wave_coefficients']
         self.cumulative_gradients = torch.cat([self.cumulative_gradients, 
-            torch.empty([new_prims], device=self.device, dtype=torch.float32)])
+            torch.empty([new_prims], device=self.opt['device'], dtype=torch.float32)])
         self.cumulative_gradients.zero_()
         return new_prims
         
@@ -308,45 +312,34 @@ class PeriodicPrimitives3D(torch.nn.Module):
         with torch.no_grad():
             dict = torch.load(path)
             for name in dict:
-                if name == "gaussian_colors":
-                    self.gaussian_colors = Parameter(dict[name])
-                if name == "gaussian_positions":
-                    self.gaussian_positions = Parameter(dict[name])
-                if name == "gaussian_scales":
-                    self.gaussian_scales = Parameter(dict[name])
-                if name == "gaussian_rotations":
-                    self.gaussian_rotations = Parameter(dict[name])
+                if name == "primitive_alphas":
+                    self.primitive_alphas = Parameter(dict[name])
+                if name == "primitive_colors":
+                    self.primitive_colors = Parameter(dict[name])
+                if name == "primitive_positions":
+                    self.primitive_positions = Parameter(dict[name])
+                if name == "primitive_scales":
+                    self.primitive_scales = Parameter(dict[name])
+                if name == "primitive_rotations":
+                    self.primitive_rotations = Parameter(dict[name])
                 if name == "wave_coefficients":
                     self.wave_coefficients = Parameter(dict[name])
-                if name == "num_dimensions":
-                    self.num_dimensions = dict[name]
-                if name == "n_channels":
-                    self.n_channels = dict[name]
-                if name == "num_frequencies":
-                    self.num_frequencies = dict[name]
-                if name == "max_frequency":
-                    self.max_frequency = dict[name]
-                if name == "num_top_freqs":
-                    self.num_top_freqs = dict[name]
-                if name == "num_random_freqs":
-                    self.num_random_freqs = dict[name]
-                if name == "gaussian_only":
-                    self.gaussian_only = dict[name]
+
         print("Successfully loaded trained model.")
     
     def vis_heatmap(self, points):
         top_k_coeffs, top_k_indices = self.get_topk_waves()
         heatmap = PeriodicPrimitivesFunction.apply(points, 
-            self.gaussian_colors, self.gaussian_positions, torch.exp(self.gaussian_scales),
-            self.gaussian_rotations, top_k_coeffs, top_k_indices,
-            self.num_top_freqs, self.num_random_freqs, self.max_frequency, self.gaussian_only, True)
+            self.primitive_colors, self.primitive_positions, torch.exp(self.primitive_scales),
+            self.primitive_rotations, top_k_coeffs, top_k_indices,
+            self.num_top_freqs, self.num_random_freqs, self.opt['max_frequency'], self.opt['gaussian_only'], True)
         heatmap = heatmap / heatmap.max()
         return heatmap
 
     def prune_tensors_from_optimizer(self, mask):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
-            if(self.gaussian_only and group['name'] == "wave_coefficients"):
+            if(self.opt['gaussian_only'] and group['name'] == "wave_coefficients"):
                 continue
             if(group['params'][0].shape[0] == mask.shape[0]):
                 stored_state = self.optimizer.state.get(group['params'][0], None)
@@ -365,34 +358,8 @@ class PeriodicPrimitives3D(torch.nn.Module):
         return optimizable_tensors
 
     def prune_primitives(self, min_contribution:int=1./1000., min_width = 8192.):
-        self.gaussian_scales.clamp_max_(np.log(min_width*0.99))
-        exp_scales = torch.exp(self.gaussian_scales)
-        r_max = 3/exp_scales.min(dim=1).values
-        inv_r_min = exp_scales.max(dim=1).values
-        on_image = (self.gaussian_positions[:,0]+r_max >= 0) * (self.gaussian_positions[:,0]-r_max <= 1.0) * \
-                    (self.gaussian_positions[:,1]+r_max >= 0) * (self.gaussian_positions[:,1]-r_max <= 1.0)
-        large_enough = inv_r_min < min_width
-        gaussians_mask = on_image * large_enough
-        '''
-        if(not self.gaussian_only):
-            gaussians_mask *= ((torch.linalg.norm(self.gaussian_colors,dim=-1) * \
-                (torch.linalg.norm(self.wave_coefficients, dim=-1))) > min_contribution) 
-        else:
-            gaussians_mask *= (torch.linalg.norm(self.gaussian_colors,dim=-1) > min_contribution)
-        '''
+        
         to_remove = 0
-        if(len(gaussians_mask.shape)>0):
-            to_remove = gaussians_mask.shape[0]-gaussians_mask.sum()
-            if(to_remove>0):
-                #print(f" Pruning {to_remove} wave{'s' if to_remove>1 else ''}.")
-                updated_params = self.prune_tensors_from_optimizer(gaussians_mask)
-                self.gaussian_colors = updated_params['gaussian_colors']
-                self.gaussian_positions = updated_params['gaussian_positions']
-                self.gaussian_scales = updated_params['gaussian_scales']
-                self.gaussian_rotations = updated_params['gaussian_rotations']
-                if not self.gaussian_only:
-                    self.wave_coefficients = updated_params['wave_coefficients']
-                self.cumulative_gradients = self.cumulative_gradients[gaussians_mask]
         return to_remove
         
     def loss(self, x, y):
@@ -406,51 +373,77 @@ class PeriodicPrimitives3D(torch.nn.Module):
         }
         return losses, model_out
 
-    def get_topk_waves(self, with_random = True):
+    def get_topk_waves(self):
         if(self.training or True):
             coefficients_to_send, indices_to_send = torch.topk(torch.abs(self.wave_coefficients),
-                                    self.num_top_freqs, dim=1, sorted=False)
-            coefficients_to_send = coefficients_to_send * torch.gather(self.wave_coefficients.sign(), dim=1, index=indices_to_send)
+                                    self.opt['num_total_frequencies'], dim=1, sorted=False)
+            coefficients_to_send = coefficients_to_send * \
+                torch.gather(self.wave_coefficients.sign(), dim=1, index=indices_to_send)
             indices_to_send = indices_to_send.type(torch.int)
-            if(self.num_random_freqs > 0 and with_random):
-                rand_indices = torch.topk(torch.randint(0, self.wave_coefficients.shape[1]-1, 
-                                        self.wave_coefficients.shape, device=self.device, dtype=torch.int), 
-                                        self.num_random_freqs, sorted=False, dim=1).indices
-                rand_coefficients = torch.gather(self.wave_coefficients.detach(), dim=1, index=rand_indices)
-
-                coefficients_to_send = torch.cat([coefficients_to_send, rand_coefficients], dim=0)
-                indices_to_send = torch.cat([indices_to_send, rand_indices.type(torch.int)], dim=0)
-
-        else:
-            # not implemented yet
-            coefficients_to_send = self.wave_coefficients
-            indices_to_send = torch.arange(0, self.wave_coefficients.shape[1],
-                                           dtype=torch.int, device=self.device)
-            indices_to_send = indices_to_send[None,:,None].repeat(
-                self.wave_coefficients.shape[0], 1, self.wave_coefficients.shape[2])
         
         return coefficients_to_send, indices_to_send
 
-    def forward(self, x) -> torch.Tensor:
+    def forward(self, cam_position, view_matrix, proj_matrix, 
+                fov_x, fov_y, 
+                image_width, image_height,
+                background_color,
+                scale_modifier = 1.0,
+                gaussian_only = None) -> torch.Tensor:
         top_k_coeffs, top_k_indices = self.get_topk_waves()
-        return PeriodicPrimitivesFunction.apply(x, 
-            self.gaussian_colors, self.gaussian_positions, torch.exp(self.gaussian_scales),
-            self.gaussian_rotations, top_k_coeffs, top_k_indices,
-            self.num_top_freqs, self.num_random_freqs, self.max_frequency, self.gaussian_only, False)
+        if(gaussian_only is None): 
+            gaussian_only = self.opt['gaussian_only']
+        return PeriodicPrimitivesFunction.apply(self.primitive_colors, 
+                self.primitive_alphas, background_color,
+                self.primitive_positions, 
+                torch.exp(self.primitive_scales), 
+                scale_modifier,
+                self.primitive_rotations / (torch.norm(self.primitive_rotations)+1e-8), 
+                top_k_coeffs, top_k_indices,
+                self.opt['max_frequency'], 
+                cam_position, view_matrix, proj_matrix,
+                fov_x, fov_y, 
+                image_width, image_height,
+                gaussian_only, False)
 
-    def forward_pytorch(self, x):
-        # x is [N, 2]
-        top_k_coeffs, top_k_indices = self.get_topk_waves()
-        t_x = x[:,None,0] - self.gaussian_positions[None,:,0]
-        t_y = x[:,None,1] - self.gaussian_positions[None,:,1]
-        cosr = torch.cos(self.gaussian_rotations[:,0])[None,...]
-        sinr = torch.sin(self.gaussian_rotations[:,0])[None,...]
-        rs_x = torch.exp(self.gaussian_scales[None,:,0])*(t_x*cosr  + t_y*sinr)
-        rs_y = torch.exp(self.gaussian_scales[None,:,1])*(t_x*-sinr + t_y*cosr)
-        g = torch.exp(-0.5*(rs_x*rs_x + rs_y*rs_y))
-        
-        if(not self.gaussian_only):
-            w = top_k_coeffs[None,...]*torch.cos(rs_x[...,None]*self.max_frequency*(top_k_indices[None,...])/self.num_frequencies)
-            w = w.sum(dim=2)
-            g = g*w
-        return g@self.gaussian_colors 
+torch.random.manual_seed(42)
+np.random.seed(42)
+import sys
+import os.path
+sys.path.append(
+    os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir)))
+from utils.camera_utils import getProjectionMatrix
+from options import Options
+opt = Options.get_default()
+opt['gaussian_only'] = True
+model = PeriodicPrimitives3D(opt)
+model.add_primitives(100)
+
+fov_x = 60
+fov_y = 60
+
+background_color = torch.tensor([0.0, 0.0, 0.0], device="cuda")
+cam_position = torch.tensor([0.0, 0.0, 0.0], device="cuda")
+view_matrix = torch.tensor([[1.0, 0.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0, 0.0],
+                            [0.0, 0.0, 1.0, 0.0],
+                            [0.0, 0.0, 0.0, 1.0]], device="cuda")
+proj_matrix = getProjectionMatrix(0.1, 10000, fov_x, fov_y).cuda()
+
+image_width = 800
+image_height = 800
+
+from time import time
+t0 = time()
+frames = 1000
+for i in range(frames):
+    out = model.forward(cam_position, view_matrix, proj_matrix, 
+                fov_x, fov_y, image_width, image_height, background_color)
+    torch.cuda.synchronize()
+    #print(f"{i}: {out[0,0,0].item()}")
+t1 = time()
+print(f"{frames/(t1 - t0)} FPS")
+import matplotlib.pyplot as plt
+print(out.min())
+print(out.max())
+plt.imshow(out.permute(1, 2, 0).detach().cpu().numpy())
+plt.show()

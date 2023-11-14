@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
+#include <tuple>
 namespace cg = cooperative_groups;
 
 #define FORWARD_NUM_THREADS 512
@@ -56,19 +57,21 @@ __forceinline__ __device__ void getRect(const float2 pos, int max_radius,
     int2& rect_min, int2& rect_max)
 {
 	rect_min = {
-		min(BLOCKS_X, max((int)-1, (int)(((pos.x - max_radius)/width) * (BLOCKS_X-1)))),
-		min(BLOCKS_Y, max((int)-1, (int)(((pos.y - max_radius)/height)* (BLOCKS_Y-1))))
+		min(BLOCKS_X, max((int)0, (int)(((pos.x - max_radius)/width) * (BLOCKS_X-1)))),
+		min(BLOCKS_Y, max((int)0, (int)(((pos.y - max_radius)/height)* (BLOCKS_Y-1))))
 	};
 	rect_max = {
-		min(BLOCKS_X, max((int)-1, (int)(((pos.x + max_radius)/width) * (BLOCKS_X-1)))),
-		min(BLOCKS_Y, max((int)-1, (int)(((pos.y + max_radius)/height)* (BLOCKS_Y-1))))
+		min(BLOCKS_X-1, max(-1, (int)(((pos.x + max_radius)/width) * (BLOCKS_X-1)))),
+		min(BLOCKS_Y-1, max(-1, (int)(((pos.y + max_radius)/height)* (BLOCKS_Y-1))))
 	};
 }
+
 __forceinline__ __device__ int rectToNumBlocks(int2 rect_min, int2 rect_max)
 {
 	if(rect_min.x == BLOCKS_X || rect_min.y == BLOCKS_Y || rect_max.x == -1 || rect_max.y == -1) return 0;
     return (rect_max.x - rect_min.x + 1) * (rect_max.y - rect_min.y + 1);
 }
+
 __forceinline__ __device__ float3 transformPoint4x3(const float3& p, const float* matrix)
 {
 	float3 transformed = {
@@ -93,7 +96,6 @@ __forceinline__ __device__ float4 transformPoint4x4(const float3& p, const float
 __device__ float3 operator*(const float a, const float3 &b) {
     return make_float3(a*b.x, a*b.y, a*b.z);
 }
-
 
 __device__ float3 operator+(const float3 &a, const float3 &b) {
     return make_float3(a.x+b.x, a.y+b.y, a.z+b.z);
@@ -419,7 +421,7 @@ __global__ void key_start_end_indices_cuda(uint32_t num_instances,
     }
 }
 
-__global__ void __launch_bounds__(BLOCKS_X * BLOCKS_Y)
+__global__ void //__launch_bounds__(BLOCKS_X * BLOCKS_Y)
 periodic_primitives_forward_cuda_kernel(  
     const int num_primitives,
     const uint32_t num_primitive_instances,   
@@ -447,7 +449,6 @@ periodic_primitives_forward_cuda_kernel(
 
     uint32_t primitive_start_idx = block_start_end_index[2*this_block_idx];
     uint32_t primitive_end_idx = block_start_end_index[2*this_block_idx+1];
-
     // return if no query points or gaussians in this block
     if(primitive_start_idx == primitive_end_idx) return;
 
@@ -470,7 +471,6 @@ periodic_primitives_forward_cuda_kernel(
         bot_right.y - top_left.y);
     int pix_in_block = block_size.x*block_size.y;
 
-    
     for(int batch = 0; batch < num_point_batchs; batch++){
 
         uint32_t end_idx_this_batch = min(FORWARD_NUM_THREADS, 
@@ -494,8 +494,8 @@ periodic_primitives_forward_cuda_kernel(
         // Iterate over all query points this thread is responsible for
         // Update its value according to the currently cached gaussians
         for(int i = threadID; i < pix_in_block; i += FORWARD_NUM_THREADS){
-            int x = i % block_size.x;
-            int y = i / block_size.x;
+            int x = i % block_size.x + top_left.x;
+            int y = i / block_size.x + top_left.y;
             uint32_t pix_id = width * y + x;
             
             float T = 1.0f;
@@ -560,14 +560,15 @@ uint32_t preprocess_primitives(
     float* depths,
     float* radii,
     float4* covariance_opacity_2d,
-    uint32_t* sorted_primitive_indices, 
-    uint32_t* blocks_start_end_indices){
+    uint32_t*& sorted_primitive_indices, 
+    uint32_t*& blocks_start_end_indices){
 
     // 1. Project data to 2D screen space and find num gaussians per block
+    
+    //std::cout << "Beginning preprocess_primitives_cuda" << std::endl;
     int num_primitives = positions.size(0);
     int* blocks_per_primitive;
     cudaMalloc((void**)&blocks_per_primitive, num_primitives*sizeof(int));   
-
     preprocess_primitives_cuda<<<(num_primitives+512-1)/512,512>>>(
         num_primitives, width, height,
         positions.contiguous().data_ptr<float>(), 
@@ -586,10 +587,10 @@ uint32_t preprocess_primitives(
         covariance_opacity_2d,    
         blocks_per_primitive
         );
-
     // 2. Inclusive sum on primitives per block to find total number
     // of primivite instances needed
     // Allocate temp storage for the inclusive sum
+    //std::cout << "Beginning inclusive sum" << std::endl;
     void* d_temp_storage = NULL;
     size_t temp_storage_bytes = 0;
     uint32_t* cumulative_sums;
@@ -601,6 +602,7 @@ uint32_t preprocess_primitives(
 		blocks_per_primitive, cumulative_sums, num_primitives);  
 
     
+
     // Get the total number of primitive instances we have on host (cpu)
     uint32_t total_primitive_instances;
     cudaMemcpy(&total_primitive_instances, &cumulative_sums[num_primitives-1], 
@@ -611,6 +613,7 @@ uint32_t preprocess_primitives(
     if(total_primitive_instances == 0) return total_primitive_instances;
 
     // 3. Create the primitive instances
+    //std::cout << "Creating primitive instances" << std::endl;
     uint64_t *unsorted_primitive_keys, *sorted_primitive_keys;
     uint32_t *unsorted_primitive_indices;
     cudaMalloc((void**)&unsorted_primitive_keys, total_primitive_instances*sizeof(uint64_t));   
@@ -632,6 +635,7 @@ uint32_t preprocess_primitives(
     // 4. Sort the primitive instances by keys (tileID - depth)
     // get MSB for the # tiles (bits up to 16x16) to only sort 
     // 32+msb bits instead of full 64 bits
+    //std::cout << "Sorting primitives" << std::endl;
     uint32_t bit = getHigherMsb((uint32_t)(BLOCKS_X * BLOCKS_Y));
     cudaFree(d_temp_storage);
     d_temp_storage = NULL;
@@ -653,6 +657,7 @@ uint32_t preprocess_primitives(
 		total_primitive_instances, 0, 32+bit);
 
     // 5. Identify index start/end index for primitives in each tile 
+    //std::cout << "Beginning key_start_end_indices_cuda" << std::endl;
     cudaMalloc((void**)&blocks_start_end_indices, 2*(BLOCKS_X*BLOCKS_Y)*sizeof(uint32_t));   
     cudaMemset(blocks_start_end_indices, 0, 2*(BLOCKS_X*BLOCKS_Y)*sizeof(uint32_t));
     key_start_end_indices_cuda<<<(total_primitive_instances + 512 - 1) / 512, 512>>> (
@@ -660,6 +665,11 @@ uint32_t preprocess_primitives(
         sorted_primitive_keys,
         blocks_start_end_indices
         );
+
+    // 6. Put data into tensors to use for efficient backward pass   
+    //auto options_float = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
+    //auto options_int = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
+    //auto a = torch::empty({10}, options_float);
 
     // Only relevant memory is blocks_start_end_indices and sorted_gaussian_indices.
     // Free the rest.
@@ -669,10 +679,15 @@ uint32_t preprocess_primitives(
     cudaFree(unsorted_primitive_keys);
     cudaFree(sorted_primitive_keys);
     cudaFree(cumulative_sums);
+    
+    //std::cout << "Returning" << std::endl;
     return total_primitive_instances;
 }
 
-std::vector<torch::Tensor> periodic_primitives_forward_cuda(
+void periodic_primitives_forward_cuda(
+    torch::Tensor& output,
+    torch::Tensor& final_T,
+    torch::Tensor& num_contributors,
     const torch::Tensor& rgb_colors,                   // [M, 3]
     const torch::Tensor& opacities,                    // [M, 1]
     const torch::Tensor& background_color,              // [3]
@@ -693,9 +708,7 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     const bool gaussian_only,
     const bool heatmap = false
     ) {
-        
-    // Create output tensor and other tensors
-    auto output = torch::zeros({NUM_CHANNELS, image_height, image_width}, positions.device());
+    
     
     float2 *positions_2d;
     float *depths;
@@ -728,17 +741,14 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
         sorted_primitive_indices, 
         blocks_start_end_indices);
     
-    auto options_int = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
-    auto options_float = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA);
-    torch::Tensor sorted_primitive_indices_tensor = torch::from_blob(sorted_primitive_indices, 
-        {num_primitive_instances}, options_int).clone();
-    torch::Tensor blocks_start_end_indices_tensor = torch::from_blob(blocks_start_end_indices, 
-        {BLOCKS_X*BLOCKS_Y, 2}, options_int).clone();
-   
-    if(num_primitive_instances == 0) return {output, 
-        sorted_primitive_indices_tensor, 
-        blocks_start_end_indices_tensor};
     
+    if(num_primitive_instances == 0){
+        cudaFree(positions_2d);
+        cudaFree(depths);
+        cudaFree(radii);
+        cudaFree(covariance_opacity_2d);
+        return;
+    }
 
     // Now sorted_gaussian_indices orders the indices of the original gaussian
     // tensors in block order, so items are in block [0, 0, ..., 0, 1, 1, ..., 1, 2, ...]
@@ -748,9 +758,9 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
 
     // Finally evaluate results such that query points only evaulate with gaussians
     // within the block.
-    auto final_T = torch::zeros({image_height, image_width}, options_float);
-    auto num_contributors = torch::zeros({image_height, image_width}, options_int);
-    dim3 numBlocks (16, 16);
+    
+    dim3 numBlocks (16, 16);   
+    
     periodic_primitives_forward_cuda_kernel<<<numBlocks, FORWARD_NUM_THREADS>>>(
         positions.size(0), num_primitive_instances,
         max_frequency, gaussian_only, heatmap,
@@ -766,11 +776,13 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
         num_contributors.contiguous().data_ptr<int>(),
         output.contiguous().data_ptr<float>()
         );
-    cudaFree(sorted_primitive_indices);
+    cudaFree(positions_2d);
+    cudaFree(depths);
+    cudaFree(radii);
+    cudaFree(covariance_opacity_2d);
+    cudaFree(sorted_primitive_indices); 
     cudaFree(blocks_start_end_indices);
-    return {output,
-        sorted_primitive_indices_tensor,
-        blocks_start_end_indices_tensor};
+    //std::cout << "Returning final" << std::endl;
 }
 
 
