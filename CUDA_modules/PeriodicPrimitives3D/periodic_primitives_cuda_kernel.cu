@@ -135,67 +135,12 @@ __device__ __forceinline__ void set256bitOffset(uint32_t bits[8], const int bitN
 }
 
 
-/*
-    Taken from Gaussian Splatting
-*/
-__forceinline__ __device__ bool in_frustum(int idx,
-	const float* positions,
-	const float* view_matrix,
-	const float* proj_matrix,
-	float3& p_view)
-{
-	float3 p_orig = { positions[3 * idx], positions[3 * idx + 1], positions[3 * idx + 2] };
-
-	// Bring points to screen space
-	float4 p_hom = transformPoint4x4(p_orig, proj_matrix);
-	//float p_w = 1.0f / (p_hom.w + 0.0000001f);
-	//float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
-	p_view = transformPoint4x3(p_orig, view_matrix);
-
-	return p_view.z > 0.2f; // || ((p_proj.x < -1.3 || p_proj.x > 1.3 || p_proj.y < -1.3 || p_proj.y > 1.3)))
-}
-
-
-/*
-    Taken from Gaussian Splatting
-*/
-__global__ void check_visibility_cuda(int num_primitives,
-    const float* positions,
-    const float* view_matrix,
-    const float* proj_matrix,
-    bool* visible)
-{
-	const int index = blockIdx.x * blockDim.x + threadIdx.x;
-    const int stride = blockDim.x * gridDim.x;
-    for(int i = index; i < num_primitives; i += stride){
-        float3 p_view;
-        visible[i] = in_frustum(i, positions, view_matrix, proj_matrix, p_view);
-    }
-}
-
-// Mark Gaussians as visible/invisible, based on view frustum testing
-void check_visibility(
-	int num_primitives,
-    float* positions,
-    float* view_matrix,
-    float* proj_matrix,
-    bool* visible)
-{
-	check_visibility_cuda <<<(num_primitives + 511) / 512, 512>>> (
-		num_primitives,
-        positions,
-        view_matrix,
-        proj_matrix,
-        visible);
-}
-
-
 // Forward method for converting scale and rotation properties of each
 // Gaussian to a 3D covariance matrix in world space. Also takes care
 // of quaternion normalization.
 // Taken from Gaussian Splatting code.
 __device__ void computeCov3D(const float3 scale, float mod, 
-    const float4 rot, float* cov3D)
+    const float4 rot, float (&cov3D)[6])
 {
 	// Create scaling matrix
 	glm::mat3 S = glm::mat3(1.0f);
@@ -234,13 +179,13 @@ __device__ void computeCov3D(const float3 scale, float mod,
 __device__ float3 computeCov2D(const float3& position, 
     float focal_x, float focal_y, 
     float tan_fovx, float tan_fovy, 
-    const float* cov3D, const float* viewmatrix)
+    const float* cov3D, const float* VP_matrix)
 {
 	// The following models the steps outlined by equations 29
 	// and 31 in "EWA Splatting" (Zwicker et al., 2002). 
 	// Additionally considers aspect / scaling of viewport.
 	// Transposes used to account for row-/column-major conventions.
-	float3 t = transformPoint4x3(position, viewmatrix);
+	float3 t = transformPoint4x3(position, VP_matrix);
 
 	const float limx = 1.3f * tan_fovx;
 	const float limy = 1.3f * tan_fovy;
@@ -255,9 +200,9 @@ __device__ float3 computeCov2D(const float3& position,
 		0, 0, 0);
 
 	glm::mat3 W = glm::mat3(
-		viewmatrix[0], viewmatrix[4], viewmatrix[8],
-		viewmatrix[1], viewmatrix[5], viewmatrix[9],
-		viewmatrix[2], viewmatrix[6], viewmatrix[10]);
+		VP_matrix[0], VP_matrix[4], VP_matrix[8],
+		VP_matrix[1], VP_matrix[5], VP_matrix[9],
+		VP_matrix[2], VP_matrix[6], VP_matrix[10]);
 
 	glm::mat3 T = W * J;
 
@@ -286,7 +231,7 @@ __global__ void preprocess_primitives_cuda(
     const float* __restrict__ opacities,
     const float* __restrict__ cam_position,
     const float* __restrict__ view_matrix,
-    const float* __restrict__ proj_matrix,
+    const float* __restrict__ VP_matrix,
     const float fov_x,
     const float fov_y,
     float2* __restrict__ positions_2d,
@@ -301,11 +246,11 @@ __global__ void preprocess_primitives_cuda(
 
         for(auto i = index; i < num_primitives; i += stride){
             float3 p_orig = { positions[3*i], positions[3*i+1], positions[3*i+2] };
-            float4 p_hom = transformPoint4x4(p_orig, proj_matrix);
+            float4 p_hom = transformPoint4x4(p_orig, VP_matrix);
             float p_w = 1.0f / (p_hom.w + 0.0000001f);
             float3 p_proj = { p_hom.x * p_w, p_hom.y * p_w, p_hom.z * p_w };
             float3 p_view = transformPoint4x3(p_orig, view_matrix);
-            if(p_view.z <= 0.2) continue; // near clipping plane
+            if (p_view.z <= 0.2f) continue; 
 
             
             float3 scale = {scales[3*i], scales[3*i+1], scales[3*i+2]};
@@ -317,7 +262,7 @@ __global__ void preprocess_primitives_cuda(
 	        float3 cov = computeCov2D(p_orig, 
                 fov2focal(fov_x, width), fov2focal(fov_y, height), 
                 __tanf(fov_x * 0.5f), __tanf(fov_y * 0.5f), 
-                cov3D, view_matrix);
+                cov3D, VP_matrix);
 
             // Invert covariance (EWA algorithm)
             float det = (cov.x * cov.z - cov.y * cov.y);
@@ -553,7 +498,7 @@ uint32_t preprocess_primitives(
     const torch::Tensor& opacities,
     const torch::Tensor& cam_position,
     const torch::Tensor& view_matrix,
-    const torch::Tensor& proj_matrix,
+    const torch::Tensor& VP_matrix,
     const float fov_x,
     const float fov_y,
     float2* positions_2d,
@@ -578,7 +523,7 @@ uint32_t preprocess_primitives(
         cam_position.contiguous().data_ptr<float>(),
         opacities.contiguous().data_ptr<float>(),
         view_matrix.contiguous().data_ptr<float>(),
-        proj_matrix.contiguous().data_ptr<float>(),
+        VP_matrix.contiguous().data_ptr<float>(),
         fov_x,
         fov_y,
         positions_2d,
@@ -699,8 +644,8 @@ void periodic_primitives_forward_cuda(
     const torch::Tensor& wave_coefficient_indices,     // [M, n_dim, n_freqs]
     const float max_frequency,
     const torch::Tensor& cam_position,                 // [3]
-	const torch::Tensor& view_matrix,                   // [4, 4]
-	const torch::Tensor& proj_matrix,                   // [4, 4]
+	const torch::Tensor& view_matrix,                  // [4, 4]
+	const torch::Tensor& VP_matrix,                       // [4, 4]
     const float fov_x,
     const float fov_y,
     const int image_width,
@@ -731,7 +676,7 @@ void periodic_primitives_forward_cuda(
         opacities,
         cam_position,
         view_matrix,
-        proj_matrix,
+        VP_matrix,
         fov_x,
         fov_y,
         positions_2d,

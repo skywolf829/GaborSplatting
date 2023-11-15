@@ -53,7 +53,7 @@ class PeriodicPrimitivesFunction(torch.autograd.Function):
                 rotations, 
                 topk_wave_coefficients, topk_wave_indices,
                 max_frequency, 
-                cam_position, view_matrix, proj_matrix,
+                cam_position, view_matrix, VP_matrix,
                 fov_x, fov_y, 
                 image_width, image_height,
                 gaussian_only, heatmap=False):
@@ -69,7 +69,7 @@ class PeriodicPrimitivesFunction(torch.autograd.Function):
                 rotations, 
                 topk_wave_coefficients, topk_wave_indices,
                 max_frequency, 
-                cam_position, view_matrix, proj_matrix,
+                cam_position, view_matrix, VP_matrix,
                 fov_x, fov_y, 
                 image_width, image_height,
                 gaussian_only, heatmap)
@@ -81,7 +81,7 @@ class PeriodicPrimitivesFunction(torch.autograd.Function):
                 positions, scales, 
                 rotations, 
                 topk_wave_coefficients, topk_wave_indices,
-                cam_position, view_matrix, proj_matrix]
+                cam_position, view_matrix, VP_matrix]
         
         ctx.save_for_backward(*variables)
         ctx.max_frequency = max_frequency
@@ -383,7 +383,7 @@ class PeriodicPrimitives3D(torch.nn.Module):
         
         return coefficients_to_send, indices_to_send
 
-    def forward(self, cam_position, view_matrix, proj_matrix, 
+    def forward(self, cam_position, view_matrix, VP_matrix, 
                 fov_x, fov_y, 
                 image_width, image_height,
                 background_color,
@@ -400,7 +400,7 @@ class PeriodicPrimitives3D(torch.nn.Module):
                 self.primitive_rotations / (torch.norm(self.primitive_rotations)+1e-8), 
                 top_k_coeffs, top_k_indices,
                 self.opt['max_frequency'], 
-                cam_position, view_matrix, proj_matrix,
+                cam_position, view_matrix, VP_matrix,
                 fov_x, fov_y, 
                 image_width, image_height,
                 gaussian_only, False)
@@ -422,28 +422,33 @@ fov_x = 60
 fov_y = 60
 
 background_color = torch.tensor([0.0, 0.0, 0.0], device="cuda")
-cam_position = torch.tensor([0.0, 0.0, 0.0], device="cuda")
+cam_position = torch.tensor([0.0, 0.0, 0.0], device="cuda") # doesn't matter
 view_matrix = torch.tensor([[1.0, 0.0, 0.0, 0.0],
-                            [0.0, 1.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0, -10.0],
                             [0.0, 0.0, 1.0, 0.0],
                             [0.0, 0.0, 0.0, 1.0]], device="cuda")
 proj_matrix = getProjectionMatrix(0.1, 10000, fov_x, fov_y).cuda()
-
+VP_matrix = view_matrix @ proj_matrix
 image_width = 800
 image_height = 800
 
 from time import time
 t0 = time()
-frames = 1000
+frames = 200
+d = []
 for i in range(frames):
-    out = model.forward(cam_position, view_matrix, proj_matrix, 
+    out = model.forward(cam_position, view_matrix, VP_matrix, 
                 fov_x, fov_y, image_width, image_height, background_color)
-    torch.cuda.synchronize()
+    d.append((out.permute(1, 2, 0).detach().cpu().numpy()*255).astype(np.uint8))
+    view_matrix[1,-1] += 0.1
+    VP_matrix = view_matrix @ proj_matrix
     #print(f"{i}: {out[0,0,0].item()}")
 t1 = time()
 print(f"{frames/(t1 - t0)} FPS")
 import matplotlib.pyplot as plt
 print(out.min())
 print(out.max())
-plt.imshow(out.permute(1, 2, 0).detach().cpu().numpy())
-plt.show()
+#plt.imshow(out.permute(1, 2, 0).detach().cpu().numpy())
+#plt.show()
+import imageio.v3 as imageio
+imageio.imwrite("test.gif", d)
