@@ -15,7 +15,7 @@ class Options():
         opt['num_total_prims']                      = 100000
 
         opt['max_frequency']                        = 128
-        opt['num_frequencies']                      = 4
+        opt['num_frequencies']                      = 1
         opt['num_total_frequencies']                = 128
         opt['gaussian_only']                        = False
 
