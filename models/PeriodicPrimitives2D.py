@@ -3,17 +3,21 @@ from torch.utils.cpp_extension import load
 from torch.nn import Parameter
 import os
 import numpy as np
+import PeriodicPrimitives as periodic_primitives
+
 project_folder_path = os.path.dirname(os.path.abspath(__file__))
 project_folder_path = os.path.join(project_folder_path, "..")
 data_folder = os.path.join(project_folder_path, "data")
 output_folder = os.path.join(project_folder_path, "output")
 save_folder = os.path.join(project_folder_path, "savedModels")
 
+'''
 periodic_primitives = load(name='periodic_primitives', 
     sources=[os.path.join(os.sep.join(__file__.split(os.sep)[0:-1]),"..", "CUDA_Modules", 
                             "PeriodicPrimitivesCUDA", 'periodic_primitives2DRGB_cuda.cpp'), 
             os.path.join(os.sep.join(__file__.split(os.sep)[0:-1]),"..", "CUDA_Modules", 
                             "PeriodicPrimitivesCUDA", 'periodic_primitives2DRGB_cuda_kernel.cu')], verbose=False)
+'''
 
 def get_expon_lr_func(
     lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000

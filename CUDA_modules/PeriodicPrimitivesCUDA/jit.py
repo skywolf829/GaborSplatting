@@ -2,7 +2,8 @@
 
 from torch.utils.cpp_extension import load
 import os
-
+this_folder_path = __file__.split('jit.py')[0]
+print(this_folder_path)
 periodic_primitives = load(name='periodic_primitives', 
-                    sources=[os.path.join(os.sep.join(__file__.split(os.sep)[0:-1]),'periodic_primitives2DRGB_cuda.cpp'), 
-                             os.path.join(os.sep.join(__file__.split(os.sep)[0:-1]),'periodic_primitives2DRGB_cuda_kernel.cu')])
+        sources=[os.path.join(this_folder_path,'periodic_primitives2DRGB_cuda.cpp'), 
+        os.path.join(this_folder_path,'periodic_primitives2DRGB_cuda_kernel.cu')])
