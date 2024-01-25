@@ -4,11 +4,7 @@
 #
 
 import torch
-print("Loading CUDA kernels. May need to compile...")
 from models.PeriodicPrimitives2D import PeriodicPrimitives2D
-print("Successfully loaded PeriodicPrimitives2D.")
-from models.HybridPrimitives import HybridPrimitives
-print("Successfully loaded HybridPrimitives.")
 from time import time
 from torch.profiler import profile, record_function, ProfilerActivity
 

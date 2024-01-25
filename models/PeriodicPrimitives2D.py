@@ -11,14 +11,6 @@ data_folder = os.path.join(project_folder_path, "data")
 output_folder = os.path.join(project_folder_path, "output")
 save_folder = os.path.join(project_folder_path, "savedModels")
 
-'''
-periodic_primitives = load(name='periodic_primitives', 
-    sources=[os.path.join(os.sep.join(__file__.split(os.sep)[0:-1]),"..", "CUDA_Modules", 
-                            "PeriodicPrimitivesCUDA", 'periodic_primitives2DRGB_cuda.cpp'), 
-            os.path.join(os.sep.join(__file__.split(os.sep)[0:-1]),"..", "CUDA_Modules", 
-                            "PeriodicPrimitivesCUDA", 'periodic_primitives2DRGB_cuda_kernel.cu')], verbose=False)
-'''
-
 def get_expon_lr_func(
     lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
 ):
@@ -114,6 +106,8 @@ class PeriodicPrimitivesFunction(torch.autograd.Function):
 class PeriodicPrimitives2D(torch.nn.Module):
     def __init__(self, opt):
         super(PeriodicPrimitives2D, self).__init__()
+        self.loaded = False
+        self.wave_coefficients = None
         device = opt['device']
         self.opt = opt
 
@@ -195,7 +189,7 @@ class PeriodicPrimitives2D(torch.nn.Module):
         return total * mult
     
     def get_weighed_frequency_dist(self):
-        top_k_coeffs, top_k_indices = self.get_topk_waves(with_random=False)
+        top_k_coeffs, top_k_indices = self.get_topk_waves()
         frequencies = top_k_indices*self.opt['max_frequency'] / self.opt['num_total_frequencies']
         return frequencies.flatten(), top_k_coeffs.flatten()
 
@@ -252,7 +246,8 @@ class PeriodicPrimitives2D(torch.nn.Module):
                 
                 if(writer is not None):
                     writer.add_scalar("Primitives pruned", prims_removed, i)
-
+            torch.cuda.empty_cache()
+            
         # split primitives
         if i % self.opt['split_every_iters'] == 0 and i < self.opt['train_iterations']-self.opt['fine_tune_iterations'] and \
             self.opt['split_every_iters'] != -1 and self.get_num_primitives() < self.opt['num_total_prims']:          
@@ -269,11 +264,14 @@ class PeriodicPrimitives2D(torch.nn.Module):
                     self.zero_grad()
                 else:
                     with torch.no_grad():
-                        n_extracted_peaks = self.add_primitives(self.opt['num_starting_prims'])
+                        self.add_primitives(self.opt['num_starting_prims'])
+            torch.cuda.empty_cache()
+
         if i % self.opt['blackout_every_iters'] == 0 and i > 0 and self.opt['blackout_every_iters'] > 0 and \
             i < self.opt['train_iterations'] - self.opt['fine_tune_iterations']:
             with torch.no_grad():
                 self.gaussian_colors *= 0.001
+            torch.cuda.empty_cache()
 
     def update_cumulative_gradients(self):
         with torch.no_grad():
@@ -350,10 +348,25 @@ class PeriodicPrimitives2D(torch.nn.Module):
         return new_prims
         
     def save(self, path):
-        torch.save(self.state_dict(), os.path.join(path, "model.ckpt"))
+        p = self.gaussian_positions.detach().cpu().numpy().astype(np.float32)
+        s = self.gaussian_scales.detach().cpu().numpy().astype(np.float32)
+        c = self.gaussian_colors.detach().cpu().numpy().astype(np.float32)
+        r = self.gaussian_rotations.detach().cpu().numpy().astype(np.float32)
+        f, i = self.get_topk_waves()
+        f = f.detach().cpu().numpy().astype(np.float32)
+        i = i.detach().cpu().numpy().astype(np.uint8)
+        np.savez_compressed(os.path.join(path, "model.ckpt"),
+                        positions=p,
+                        scales=s,
+                        colors=c,
+                        rotations=r,
+                        frequency_coefficients=f,
+                        frequency_indices=i)
+        #torch.save(self.state_dict(), os.path.join(path, "model.ckpt"))
 
     def load(self, path):
         with torch.no_grad():
+            '''
             dict = torch.load(os.path.join(path, "model.ckpt"))
             for name in dict:
                 if name == "gaussian_colors":
@@ -366,7 +379,41 @@ class PeriodicPrimitives2D(torch.nn.Module):
                     self.gaussian_rotations = Parameter(dict[name])
                 if name == "wave_coefficients":
                     self.wave_coefficients = Parameter(dict[name])
+            '''
+            data = np.load(os.path.join(path, "model.ckpt.npz"))
+            c = torch.tensor(data['colors'], device=self.opt['device'])
+            p = torch.tensor(data['positions'], device=self.opt['device'])
+            s = torch.tensor(data['scales'], device=self.opt['device'])
+            r = torch.tensor(data['rotations'], device=self.opt['device'])
+            if 'frequency_coefficients' in data.keys():
+                f = torch.tensor(data['frequency_coefficients'], device=self.opt['device'])
+                i = torch.tensor(data['frequency_indices'].astype(np.int32), device=self.opt['device'])
+            else:
+                f = None
+
+            tensor_dict = {
+                "gaussian_colors": c, 
+                "gaussian_positions": p,
+                "gaussian_scales": s,
+                "gaussian_rotations": r,
+                "wave_coefficients": f
+            }
+            updated_params = self.cat_tensors_to_optimizer(tensor_dict)
+
+            self.gaussian_colors = updated_params['gaussian_colors']
+            self.gaussian_positions = updated_params['gaussian_positions']
+            self.gaussian_scales = updated_params['gaussian_scales']
+            self.gaussian_rotations = updated_params['gaussian_rotations']
+            
+            if(not self.opt['gaussian_only']):
+                self.wave_coefficients = updated_params['wave_coefficients']
+                self.wave_coefficient_indices = i
+            self.cumulative_gradients = torch.cat([self.cumulative_gradients, 
+                torch.empty([c.shape[0]], device=self.opt['device'], dtype=torch.float32)])
+            self.cumulative_gradients.zero_()
+
         print("Successfully loaded trained model.")
+        self.loaded = True
     
     def vis_heatmap(self, points):
         top_k_coeffs, top_k_indices = self.get_topk_waves()
@@ -398,7 +445,7 @@ class PeriodicPrimitives2D(torch.nn.Module):
                     optimizable_tensors[group["name"]] = group["params"][0]
         return optimizable_tensors
 
-    def prune_primitives(self, min_contribution:int=1./1000., min_width = 8192.):
+    def prune_primitives(self, min_contribution:int=1./1000., min_width = 20000.):
         self.gaussian_scales.clamp_max_(np.log(min_width*0.99))
         exp_scales = torch.exp(self.gaussian_scales)
         r_max = 3/exp_scales.min(dim=1).values
@@ -407,13 +454,13 @@ class PeriodicPrimitives2D(torch.nn.Module):
                     (self.gaussian_positions[:,1]+r_max >= 0) * (self.gaussian_positions[:,1]-r_max <= 1.0)
         large_enough = inv_r_min < min_width
         gaussians_mask = on_image * large_enough
-        '''
-        if(not self.gaussian_only):
-            gaussians_mask *= ((torch.linalg.norm(self.gaussian_colors,dim=-1) * \
-                (torch.linalg.norm(self.wave_coefficients, dim=-1))) > min_contribution) 
-        else:
-            gaussians_mask *= (torch.linalg.norm(self.gaussian_colors,dim=-1) > min_contribution)
-        '''
+        
+        if(not self.opt['gaussian_only']):
+            #gaussians_mask *= (torch.linalg.norm(self.gaussian_colors,dim=-1) > min_contribution)
+            gaussians_mask *= torch.linalg.norm(self.wave_coefficients, dim=-1) > min_contribution
+        #else:
+        #    gaussians_mask *= (torch.linalg.norm(self.gaussian_colors,dim=-1) > min_contribution)
+        
         to_remove = 0
         if(len(gaussians_mask.shape)>0):
             to_remove = gaussians_mask.shape[0]-gaussians_mask.sum()
@@ -440,28 +487,20 @@ class PeriodicPrimitives2D(torch.nn.Module):
         }
         return losses, model_out
 
-    def get_topk_waves(self, with_random = True):
-        if(self.training or True):
+    def get_topk_waves(self):
+        if(self.training and not self.loaded):
             coefficients_to_send, indices_to_send = torch.topk(torch.abs(self.wave_coefficients),
                                     self.opt['num_frequencies'], dim=1, sorted=False)
             coefficients_to_send = coefficients_to_send * torch.gather(self.wave_coefficients.sign(), dim=1, index=indices_to_send)
             indices_to_send = indices_to_send.type(torch.int)
-            if(self.opt['num_frequencies'] > 0 and with_random and False):
-                rand_indices = torch.topk(torch.randint(0, self.wave_coefficients.shape[1]-1, 
-                                        self.wave_coefficients.shape, device=self.device, dtype=torch.int), 
-                                        self.num_random_freqs, sorted=False, dim=1).indices
-                rand_coefficients = torch.gather(self.wave_coefficients.detach(), dim=1, index=rand_indices)
-
-                coefficients_to_send = torch.cat([coefficients_to_send, rand_coefficients], dim=0)
-                indices_to_send = torch.cat([indices_to_send, rand_indices.type(torch.int)], dim=0)
-
+            #coefficients_to_send, indices_to_send = torch.max(
+            #    torch.abs(self.wave_coefficients), dim=1, keepdim=True)
+            #coefficients_to_send = coefficients_to_send * torch.gather(self.wave_coefficients.sign(), dim=1, index=indices_to_send)
+            #indices_to_send = indices_to_send.type(torch.int)
         else:
             # not implemented yet
             coefficients_to_send = self.wave_coefficients
-            indices_to_send = torch.arange(0, self.wave_coefficients.shape[1],
-                                           dtype=torch.int, device=self.device)
-            indices_to_send = indices_to_send[None,:,None].repeat(
-                self.wave_coefficients.shape[0], 1, self.wave_coefficients.shape[2])
+            indices_to_send = self.wave_coefficient_indices
         
         return coefficients_to_send, indices_to_send
 

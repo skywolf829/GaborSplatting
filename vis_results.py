@@ -2,186 +2,114 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import imageio.v3 as imageio
+from models.options import load_options
+import json
+from matplotlib.ticker import FuncFormatter
 
-gaussian_splatting_results = {
-    "pluto": {
-        "PSNR": [
-            [10000*8, 24.86],
-            [100000*8, 28.79],
-            [500000*8, 31.16],
-            [1000000*8, 32.45],
-        ],
-        "SSIM": [
-            [10000*8, 0.7671],
-            [100000*8, 0.8156],
-            [500000*8, 0.8200],
-            [1000000*8, 0.8681],
-        ],
-        "LPIPS": [
-            [10000*8, 0.3414],
-            [100000*8, 0.3000],
-            [500000*8, 0.2374],
-            [1000000*8, 0.1963],
-        ]
-    },
-    "earring": {
-        "PSNR": [
-            [10000*8, 22.59],
-            [100000*8, 23.19],
-            [500000*8, 23.68],
-            [700000*8, 23.87],
-            [1000000*8, 24.08],
-        ],
-        "SSIM": [
-            [10000*8, 0.5235],
-            [100000*8, 0.5370],
-            [500000*8, 0.5545],
-            [700000*8, 0.5618],
-            [1000000*8, 0.5716],
-        ],
-        "LPIPS": [
-            [10000*8, 0.6377],
-            [100000*8, 0.6510],
-            [500000*8, 0.6331],
-            [700000*8, 0.6249],  
-            [1000000*8, 0.6140],          
-        ]
-    },
-    "baboon": {
-        "PSNR": [
-            [10000*8, 21.52], 
-            [50000*8, 30.94], 
-            [100000*8, 35.68], 
-            [500000*8, 54.84], 
-            [1000000*8, 53.00], 
-        ],
-        "SSIM": [
-            [10000*8, 0.4999], 
-            [50000*8, 0.8628], 
-            [100000*8, 0.9281], 
-            [500000*8, 0.9998], 
-            [1000000*8, 0.9999],
-        ],
-        "LPIPS": [
-            [10000*8, 0.4492],             
-            [50000*8, 0.1146], 
-            [100000*8, 0.0600], 
-            [500000*8, 0.0000], 
-            [1000000*8, 0.0001],
-        ]
-    },
-    "gigapixel": {
-        "PSNR": [
-            [100000*8, 23.09], 
-            [300000*8, 24.35],
-            [500000*8, 24.84], 
-            [700000*8, 25.12], 
-            [1000000*8, 25.39], 
-        ]
-    }
-}
 
-periodic_primitives_results = {
-    "pluto": {
-        "PSNR": [
-            [10000*12, 26.09],
-            [100000*12, 30.41],
-            [500000*12, 33.65],
-            [700000*12, 34.38],
-        ],
-        "SSIM": [
-            [10000*12, 0.7083],
-            [100000*12, 0.8218],
-            [500000*12, 0.8869],
-            [700000*12, 0.8996],
-        ],
-        "LPIPS": [
-            [10000*12, 0.4033],
-            [100000*12, 0.2465],
-            [500000*12, 0.1408],
-            [700000*12, 0.1182],
-        ]
-    },
-    "earring": {
-        "PSNR": [
-            [10000*12, 22.93],
-            [100000*12, 24.00],
-            [500000*12, 25.34], 
-            [700000*12, 25.64],
-        ],
-        "SSIM": [
-            [10000*12, 0.5270],
-            [100000*12, 0.5674],
-            [500000*12, 0.6176], 
-            [700000*12, 0.6297],
-        ],
-        "LPIPS": [    
-            [10000*12, 0.6673],
-            [100000*12, 0.5852], 
-            [500000*12, 0.5352],        
-            [700000*12, 0.5163],
-        ]
-    },
-    "baboon": {
-        "PSNR": [
-            [10000*12, 27.32], 
-            [50000*12, 42.49], 
-            [100000*12, 57.00], 
-            [500000*12, 63.53], 
-        ],
-        "SSIM": [
-            [10000*12, 0.8579], 
-            [50000*12, 0.9851], 
-            [100000*12, 0.9996], 
-            [500000*12, 1.0000], 
-        ],
-        "LPIPS": [
-            [10000*12, 0.0555], 
-            [50000*12, 0.0027], 
-            [100000*12, 0.0000], 
-            [500000*12, 0.0000], 
-        ]
-    },
-    "gigapixel": {
-        "PSNR": [
-            [50000*12, 23.05], 
-            [100000*12, 23.95], 
-            [300000*12, 25.35], 
-            [500000*12, 25.95], 
-            [700000*12, 26.32], 
-        ]
-    }
-}
+project_folder_path = os.path.dirname(os.path.abspath(__file__))
+output_folder = os.path.join(project_folder_path, "output")
+save_folder = os.path.join(project_folder_path, "savedModels", "param_comparison")
+
+def millions(x, pos):
+    'The two args are the value and tick position'
+    return '%1.1fM' % (x * 1e-6)
+
+def plot_chart(dataset_name, dataset_results):
+    
+    num_metrics = 3
+
+    with plt.style.context("seaborn-paper"):
+        fig, axs = plt.subplots(1, num_metrics, figsize=(4*3, 4))
+        fig.suptitle(dataset_name)
+        num_options = len(dataset_results.keys())
+        formatter = FuncFormatter(millions)
+        colors = ['blue', 'green', 'red', 'purple', 'orange', 'brown', "pink"]
+        markers = ['o','v','x','s','^',"."]
+
+        if(num_options > min(len(colors), len(markers))):
+            print(f"Need more color/marker choices for the options you have!")
+            return
+
+        option_no = 0
+        for option in dataset_results.keys():           
+            num_params = np.array(dataset_results[option]["num_params"])
+            sorted_order = np.argsort(num_params)
+            sorted_params = num_params[sorted_order]
+
+            metric_no = 0
+            for metric in dataset_results[option].keys():
+                if metric == "num_params":
+                    continue
+                ax = axs[metric_no]
+                ax.xaxis.set_major_formatter(millions)   
+                ax.set_title(metric)
+                ax.set_xlabel("Num params")
+
+                # Periodic primitives
+                color=colors[option_no]
+                marker=markers[option_no]
+                sorted_metric = np.array(dataset_results[option][metric])[sorted_order]
+                ax.plot(sorted_params, sorted_metric, color=color, marker=marker, label=option) 
+                
+
+                metric_no += 1
+            option_no += 1
+
+        axs[-1].legend()
+        fig.show()
+        plt.waitforbuttonpress()
 
 def generate_charts():
+    # an object to hold all results, broken up by dataset type
+    results = {}
+
+    # iterate through all saved models
+    for savedModel in os.listdir(save_folder):
+        
+        # check if the model, options file, and results file exists
+        checks = os.path.exists(os.path.join(save_folder, savedModel, "model.ckpt.npz")) and \
+                os.path.exists(os.path.join(save_folder, savedModel, "options.json")) and \
+                os.path.exists(os.path.join(save_folder, savedModel, "results.json"))
+
+        # skip this model if it is missing some part 
+        if not checks:
+            continue
+
+        # get the model details from the options file
+        opt = load_options(os.path.join(save_folder, savedModel))
+        # load the model's results
+        fp = open(os.path.join(save_folder, savedModel, "results.json"))
+        result = json.load(fp)
+        fp.close()
+        
+        # categorize results by image and by the training setup
+        image_name = opt['training_data'].split(".")[0]
+        suboptions = "Gaussian" if opt['gaussian_only'] else f"Gabor"
+        
+        # for frequency only tests
+        #if opt['gaussian_only']:
+        #    continue
+        # for ours (2 frequencies) vs GS only
+        #if opt['num_frequencies'] != 2 and not opt['gaussian_only']:
+        #    continue
+        
+        if image_name not in results.keys():
+            results[image_name] = {}
+        if suboptions not in results[image_name].keys():
+            results[image_name][suboptions] = {}
+        
+        for metric in result.keys():
+            if "PSNR" in metric or "SSIM" in metric or "LPIPS" in metric or "num_params" in metric:
+                if metric not in results[image_name][suboptions].keys():
+                    results[image_name][suboptions][metric] = []
+                results[image_name][suboptions][metric].append(result[metric])
+
+    # next, make a chart for each image
     
-    num_datasets = len(gaussian_splatting_results.keys())
-    dataset_no = 0
-    for dataset in gaussian_splatting_results.keys():
-        plt.suptitle(dataset)
-        num_metrics = len(gaussian_splatting_results[dataset].keys())
-        metric_no = 0
-        for metric in gaussian_splatting_results[dataset].keys():            
-            plt.subplot(1, num_metrics, metric_no+1)
-            plt.title(metric)            
+    for image_name in results.keys():
+        plot_chart(image_name, results[image_name])
 
-            # Gaussian splatting
-            color="orange"
-            marker="o"
-            results = np.array(gaussian_splatting_results[dataset][metric])
-            plt.plot(results[:,0], results[:,1], color=color, marker=marker, label="Gaussians")       
-            
-            # Periodic primitives
-            color="blue"
-            marker="^"
-            results = np.array(periodic_primitives_results[dataset][metric])
-            plt.plot(results[:,0], results[:,1], color=color, marker=marker, label="Ours") 
-
-            metric_no += 1
-        plt.legend()
-        plt.show()
-        plt.clf()
-        dataset_no += 1
 
 def crop_imgs():
     import PIL.Image
@@ -294,5 +222,4 @@ def crop_imgs():
     imageio.imwrite(os.path.join(output_folder, "crops", "gigapixel", "gigapixel_ours_c2.png"), gigapixel_ours_c2)
 
 
-#generate_charts()
-crop_imgs()
+generate_charts()

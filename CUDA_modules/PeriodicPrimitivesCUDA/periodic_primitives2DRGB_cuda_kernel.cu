@@ -18,7 +18,6 @@ namespace cg = cooperative_groups;
 #define BLOCKS_X 16
 #define BLOCKS_Y 16
 
-
 __device__ float3 operator*(const float a, const float3 &b) {
     return make_float3(a*b.x, a*b.y, a*b.z);
 }
@@ -56,17 +55,17 @@ __device__ __forceinline__ void set256bitOffset(uint32_t bits[8], const int bitN
 
 
 __global__ void point_to_block_and_index(  
-    int num_points,
+    size_t num_points,
     float2 min_position, float2 range,
     const float* __restrict__ positions,
-    int* block,
-    int* point_index
+    uint32_t* block,
+    uint32_t* point_index
 ) {
     // Get block/thread related numbers   
-    const int index = blockIdx.x * blockDim.x + threadIdx.x;
-    const int stride = blockDim.x * gridDim.x;
+    const auto index = blockIdx.x * blockDim.x + threadIdx.x;
+    const auto stride = blockDim.x * gridDim.x;
 
-    for(int i = index; i < num_points; i += stride){
+    for(auto i = index; i < num_points; i += stride){
         float px = positions[2*i];
         float py = positions[2*i+1];
         int x_block = BLOCKS_X*((px - min_position.x)/range.x);
@@ -87,8 +86,8 @@ __global__ void find_blocks_per_gaussian(
     int* blocks_per_gaussian
 ) {
     // Get block/thread related numbers   
-    const int index = blockIdx.x * blockDim.x + threadIdx.x;
-    const int stride = blockDim.x * gridDim.x;
+    const auto index = blockIdx.x * blockDim.x + threadIdx.x;
+    const auto stride = blockDim.x * gridDim.x;
 
     for(int i = index; i < num_points; i += stride){
         float sx = scales[2*i];
@@ -115,15 +114,15 @@ __global__ void create_gaussian_instances(
     float2 min_pos, float2 range,
     const float* __restrict__ positions,
     const float* __restrict__ scales,
-    int* __restrict__ cumulative_sums,
-    int* __restrict__ unsorted_gaussian_keys,
-    int* __restrict__ unsorted_gaussian_indices
+    uint32_t* __restrict__ cumulative_sums,
+    uint32_t* __restrict__ unsorted_gaussian_keys,
+    uint32_t* __restrict__ unsorted_gaussian_indices
     ) {
         // Get block/thread related numbers   
-        const int index = blockIdx.x * blockDim.x + threadIdx.x;
-        const int stride = blockDim.x * gridDim.x;
+        const auto index = blockIdx.x * blockDim.x + threadIdx.x;
+        const auto stride = blockDim.x * gridDim.x;
 
-        int offset = 0;
+        auto offset = 0;
         for(auto i = index; i < num_gaussians; i += stride){
             offset = (i == 0) ? 0 : cumulative_sums[i-1];
             float sx = scales[2*i];
@@ -142,9 +141,7 @@ __global__ void create_gaussian_instances(
             y_block_max = max(min(BLOCKS_Y-1, y_block_max), -1);
             for (int x = x_block_min; x <= x_block_max && x < BLOCKS_X; x++){
                 for (int y = y_block_min; y <= y_block_max && y < BLOCKS_Y; y++){
-                    int key = (y*BLOCKS_X+x);
-                    //key <<= 32;
-                    //key |= (uint32_t)i;
+                    uint32_t key = (y*BLOCKS_X+x);
                     unsorted_gaussian_keys[offset] = key;
                     unsorted_gaussian_indices[offset] = i;
                     offset++;
@@ -153,23 +150,23 @@ __global__ void create_gaussian_instances(
         }
     }
 
-__global__ void key_start_end_indices_cuda(int num_instances, int* keys, int* tile_start_end)
+__global__ void key_start_end_indices_cuda(size_t num_instances, uint32_t* keys, uint32_t* tile_start_end)
 {
-    const int index = blockIdx.x * blockDim.x + threadIdx.x;
-    const int stride = blockDim.x * gridDim.x;
+    const auto index = blockIdx.x * blockDim.x + threadIdx.x;
+    const auto stride = blockDim.x * gridDim.x;
 
     for(auto i = index; i < num_instances; i += stride){
-        int this_key = keys[i];
+        auto this_key = keys[i];
 
         if(i > 0){       
-            int last_key = keys[i-1];
+            auto last_key = keys[i-1];
             if(this_key != last_key){
                 tile_start_end[2*last_key+1] = i;
                 tile_start_end[2*this_key] = i;
             }
         }
         if(i < num_instances-1){            
-            int next_key = keys[i+1];
+            auto next_key = keys[i+1];
             if(this_key != next_key){
                 tile_start_end[2*this_key+1] = i+1;
                 tile_start_end[2*next_key] = i+1;
@@ -191,23 +188,23 @@ __global__ void periodic_primitives_forward_cuda_kernel(
     const float* __restrict__ rotations,
     const float* __restrict__ wave_coefficients,
     const int* __restrict__ wave_coefficient_indices,
-    const int* __restrict__ gaussian_instance_indices,
-    const int* __restrict__ block_start_end_index_gaussians,
-    const int* __restrict__ query_indices,
-    const int* __restrict__ block_start_end_index_query_points,
+    const uint32_t* __restrict__ gaussian_instance_indices,
+    const uint32_t* __restrict__ block_start_end_index_gaussians,
+    const uint32_t* __restrict__ query_indices,
+    const uint32_t* __restrict__ block_start_end_index_query_points,
     float* __restrict__ output
     ) {
 
     // Get block/thread related numbers   
-    const int threadID = threadIdx.x;
-    const int block_x = blockIdx.x;
-    const int block_y = blockIdx.y;
-    const int this_block_idx = BLOCKS_X*block_y + block_x;
+    const auto threadID = threadIdx.x;
+    const auto block_x = blockIdx.x;
+    const auto block_y = blockIdx.y;
+    const auto this_block_idx = BLOCKS_X*block_y + block_x;
 
-    int query_point_start_idx = block_start_end_index_query_points[2*this_block_idx];
-    int query_point_end_idx = block_start_end_index_query_points[2*this_block_idx+1];
-    int gaussian_start_idx = block_start_end_index_gaussians[2*this_block_idx];
-    int gaussian_end_idx = block_start_end_index_gaussians[2*this_block_idx+1];
+    auto query_point_start_idx = block_start_end_index_query_points[2*this_block_idx];
+    auto query_point_end_idx = block_start_end_index_query_points[2*this_block_idx+1];
+    auto gaussian_start_idx = block_start_end_index_gaussians[2*this_block_idx];
+    auto gaussian_end_idx = block_start_end_index_gaussians[2*this_block_idx+1];
 
     // return if no query points or gaussians in this block
     if(query_point_start_idx == query_point_end_idx || gaussian_start_idx == gaussian_end_idx) return;
@@ -246,12 +243,12 @@ __global__ void periodic_primitives_forward_cuda_kernel(
         __syncthreads();
         // Iterate over all query points this thread is responsible for
         // Update its value according to the currently cached gaussians
-        for(int i = query_point_start_idx+threadID; i < query_point_end_idx; i += FORWARD_NUM_THREADS){
+        for(auto i = query_point_start_idx+threadID; i < query_point_end_idx; i += FORWARD_NUM_THREADS){
             
-            int real_query_index = query_indices[i];
+            auto real_query_index = query_indices[i];
             float2 x = {input[2*real_query_index], input[2*real_query_index+1]};
             float3 temp_result = {0.0f, 0.0f, 0.0f};
-            for(int j = 0; j < end_idx_this_batch; j++){
+            for(auto j = 0; j < end_idx_this_batch; j++){
 
                 float2 dx = x - make_float2(gaussian_positions[j][0], gaussian_positions[j][1]);
                 float cosr = __cosf(gaussian_rotations[j]);
@@ -305,22 +302,22 @@ __global__ void periodic_primitives_backward_cuda_kernel(
     float* __restrict__ dScales,
     float* __restrict__ dRotations,
     float* __restrict__ dCoefficients,
-    const int* __restrict__ gaussian_instance_indices,
-    const int* __restrict__ block_start_end_index_gaussians,
-    const int* __restrict__ query_indices,
-    const int* __restrict__ block_start_end_index_query_points
+    const uint32_t* __restrict__ gaussian_instance_indices,
+    const uint32_t* __restrict__ block_start_end_index_gaussians,
+    const uint32_t* __restrict__ query_indices,
+    const uint32_t* __restrict__ block_start_end_index_query_points
     ) 
 {
    // Get block/thread related numbers   
-    const int threadID = threadIdx.x;
-    const int block_x = blockIdx.x;
-    const int block_y = blockIdx.y;
-    const int this_block_idx = BLOCKS_X*block_y + block_x;
+    const auto threadID = threadIdx.x;
+    const auto block_x = blockIdx.x;
+    const auto block_y = blockIdx.y;
+    const auto this_block_idx = BLOCKS_X*block_y + block_x;
 
-    int query_point_start_idx = block_start_end_index_query_points[2*this_block_idx];
-    int query_point_end_idx = block_start_end_index_query_points[2*this_block_idx+1];
-    int gaussian_start_idx = block_start_end_index_gaussians[2*this_block_idx];
-    int gaussian_end_idx = block_start_end_index_gaussians[2*this_block_idx+1];
+    auto query_point_start_idx = block_start_end_index_query_points[2*this_block_idx];
+    auto query_point_end_idx = block_start_end_index_query_points[2*this_block_idx+1];
+    auto gaussian_start_idx = block_start_end_index_gaussians[2*this_block_idx];
+    auto gaussian_end_idx = block_start_end_index_gaussians[2*this_block_idx+1];
 
     // return if no query points or gaussians in this block
     if(query_point_start_idx == query_point_end_idx || gaussian_start_idx == gaussian_end_idx) return;
@@ -328,17 +325,17 @@ __global__ void periodic_primitives_backward_cuda_kernel(
     __shared__ float query_point_positions[FORWARD_NUM_THREADS][2];
     __shared__ float dRGB[FORWARD_NUM_THREADS][3];
     
-    int num_point_batchs = 1 + (query_point_end_idx - query_point_start_idx) / FORWARD_NUM_THREADS;
+    auto num_point_batchs = 1 + (query_point_end_idx - query_point_start_idx) / FORWARD_NUM_THREADS;
 
-    for(int batch = 0; batch < num_point_batchs; batch++){
+    for(auto batch = 0; batch < num_point_batchs; batch++){
 
-        int end_idx_this_batch = min(FORWARD_NUM_THREADS, query_point_end_idx-query_point_start_idx-batch*FORWARD_NUM_THREADS);
+        auto end_idx_this_batch = min(FORWARD_NUM_THREADS, query_point_end_idx-query_point_start_idx-batch*FORWARD_NUM_THREADS);
 
         // Each thread loads a part of global memory to shared (random reads)
-        int collect_idx = query_point_start_idx + batch*FORWARD_NUM_THREADS + threadID;
+        auto collect_idx = query_point_start_idx + batch*FORWARD_NUM_THREADS + threadID;
         __syncthreads();
         if(collect_idx < batch_size){
-            int idx = query_indices[collect_idx];
+            auto idx = query_indices[collect_idx];
             query_point_positions[threadID][0] = input[2*idx];
             query_point_positions[threadID][1] = input[2*idx+1];
             dRGB[threadID][0] = grad_output[3*idx];
@@ -348,9 +345,9 @@ __global__ void periodic_primitives_backward_cuda_kernel(
         __syncthreads();
         // Iterate over all gaussians points this thread is responsible for
         // Update its value according to the currently cached gaussians
-        for(int i = gaussian_start_idx+threadID; i < gaussian_end_idx; i += FORWARD_NUM_THREADS){
+        for(auto i = gaussian_start_idx+threadID; i < gaussian_end_idx; i += FORWARD_NUM_THREADS){
             
-            int real_query_index = gaussian_instance_indices[i];
+            auto real_query_index = gaussian_instance_indices[i];
             float3 color = {colors[3*real_query_index], colors[3*real_query_index+1], colors[3*real_query_index+2]};
             float2 pos = {positions[2*real_query_index], positions[2*real_query_index+1]};
             float2 s = {scales[2*real_query_index], scales[2*real_query_index+1]};
@@ -442,23 +439,24 @@ __global__ void periodic_primitives_backward_cuda_kernel(
 }
 
 void sort_query_points_to_blocks(torch::Tensor positions,
-float2 min_pos, float2 max_pos, int *&sorted_point_indices, int *&query_point_block_start_end_indices){
-    int num_points = positions.size(0);
+    float2 min_pos, float2 max_pos, 
+    uint32_t *&sorted_point_indices, uint32_t *&query_point_block_start_end_indices){
+    auto num_points = positions.size(0);
     float2 range = make_float2(max_pos.x-min_pos.x,
                                 max_pos.y-min_pos.y);
     
     
-    int *unsorted_point_blocks, *unsorted_point_indices;
-    cudaMalloc((void**)&unsorted_point_blocks, num_points*sizeof(int));  
-    cudaMalloc((void**)&unsorted_point_indices, num_points*sizeof(int));
+    uint32_t *unsorted_point_blocks, *unsorted_point_indices;
+    cudaMalloc((void**)&unsorted_point_blocks, num_points*sizeof(uint32_t));  
+    cudaMalloc((void**)&unsorted_point_indices, num_points*sizeof(uint32_t));
     point_to_block_and_index<<<num_points+512-1/512, 512>>>(num_points,
         min_pos, range,
         positions.contiguous().data_ptr<float>(),
         unsorted_point_blocks, unsorted_point_indices);
 
-    int *sorted_point_blocks;
-    cudaMalloc((void**)&sorted_point_blocks, num_points*sizeof(int));  
-    cudaMalloc((void**)&sorted_point_indices, num_points*sizeof(int));
+    uint32_t *sorted_point_blocks;
+    cudaMalloc((void**)&sorted_point_blocks, num_points*sizeof(uint32_t));  
+    cudaMalloc((void**)&sorted_point_indices, num_points*sizeof(uint32_t));
 
     void* d_temp_storage = NULL;
     size_t temp_storage_bytes = 0;
@@ -491,11 +489,12 @@ float2 min_pos, float2 max_pos, int *&sorted_point_indices, int *&query_point_bl
     cudaFree(d_temp_storage);
 }
 
-int sort_gaussians_to_blocks(torch::Tensor gaussian_positions, torch::Tensor gaussian_scales,
-float2 min_pos, float2 max_pos, int *&sorted_gaussian_indices, int *&block_start_end_indices){
+uint32_t sort_gaussians_to_blocks(torch::Tensor gaussian_positions, torch::Tensor gaussian_scales,
+    float2 min_pos, float2 max_pos, 
+    uint32_t *&sorted_gaussian_indices, uint32_t *&block_start_end_indices){
 
     // 1. Determine the number of gaussians per block
-    int num_gaussians = gaussian_positions.size(0);
+    auto num_gaussians = gaussian_positions.size(0);
     float2 range = make_float2(max_pos.x-min_pos.x,max_pos.y-min_pos.y);
     int* blocks_per_gaussian;
     cudaMalloc((void**)&blocks_per_gaussian, num_gaussians*sizeof(int));   
@@ -512,8 +511,8 @@ float2 min_pos, float2 max_pos, int *&sorted_gaussian_indices, int *&block_start
     // Allocate temp storage for the inclusive sum
     void* d_temp_storage = NULL;
     size_t temp_storage_bytes = 0;
-    int* cumulative_sums;
-    cudaMalloc((void**)&cumulative_sums, num_gaussians*sizeof(int));    
+    uint32_t* cumulative_sums;
+    cudaMalloc((void**)&cumulative_sums, num_gaussians*sizeof(uint32_t));    
     cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes,
 		blocks_per_gaussian, cumulative_sums, num_gaussians);    
     cudaMalloc(&d_temp_storage, temp_storage_bytes);
@@ -523,19 +522,19 @@ float2 min_pos, float2 max_pos, int *&sorted_gaussian_indices, int *&block_start
     
     
     // Get the total number of gaussian instances we have on host (cpu)
-    int total_gaussian_instances;
-    cudaMemcpy(&total_gaussian_instances, &cumulative_sums[num_gaussians-1], sizeof(int), cudaMemcpyDeviceToHost);
+    uint32_t total_gaussian_instances;
+    cudaMemcpy(&total_gaussian_instances, &cumulative_sums[num_gaussians-1], sizeof(uint32_t), cudaMemcpyDeviceToHost);
     //std::cout << "Total gaussian instances: " << total_gaussian_instances << std::endl;
 
     // If 0 gaussians need to be rendered, return
     if(total_gaussian_instances == 0) return total_gaussian_instances;
     // 3. Create the gaussian instances
-    int *unsorted_gaussian_keys, *sorted_gaussian_keys;
-    int *unsorted_gaussian_indices;
-    cudaMalloc((void**)&unsorted_gaussian_keys, total_gaussian_instances*sizeof(int));   
-    cudaMalloc((void**)&sorted_gaussian_keys, total_gaussian_instances*sizeof(int));   
-    cudaMalloc((void**)&unsorted_gaussian_indices, total_gaussian_instances*sizeof(int));  
-    cudaMalloc((void**)&sorted_gaussian_indices, total_gaussian_instances*sizeof(int));   
+    uint32_t *unsorted_gaussian_keys, *sorted_gaussian_keys;
+    uint32_t *unsorted_gaussian_indices;
+    cudaMalloc((void**)&unsorted_gaussian_keys, total_gaussian_instances*sizeof(uint32_t));   
+    cudaMalloc((void**)&sorted_gaussian_keys, total_gaussian_instances*sizeof(uint32_t));   
+    cudaMalloc((void**)&unsorted_gaussian_indices, total_gaussian_instances*sizeof(uint32_t));  
+    cudaMalloc((void**)&sorted_gaussian_indices, total_gaussian_instances*sizeof(uint32_t));   
 
     create_gaussian_instances<<<(num_gaussians+512-1)/512,512>>>(
         num_gaussians,
@@ -598,21 +597,24 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     const bool gaussian_only,
     const bool heatmap = false
     ) {
-        
+    
+    auto num_query_points = input.size(0);
+    auto num_gaussians = positions.size(0);
+
     // Create output tensor and other tensors
     auto output = torch::zeros({NUM_CHANNELS, input.size(0)}, input.device());
     
     // Sort query points and gaussians into 16x16 blocks
-    int* sorted_gaussian_indices;
-    int* blocks_gaussian_start_end_indices;
-    int num_gaussian_instances = sort_gaussians_to_blocks(
+    uint32_t* sorted_gaussian_indices;
+    uint32_t* blocks_gaussian_start_end_indices;
+    uint32_t num_gaussian_instances = sort_gaussians_to_blocks(
         positions, scales,
         make_float2(0.0f, 0.0f), make_float2(1.0f, 1.0f),
         sorted_gaussian_indices, 
         blocks_gaussian_start_end_indices);
         
-    int* sorted_query_point_indices;
-    int* blocks_query_points_start_end_indices;
+    uint32_t* sorted_query_point_indices;
+    uint32_t* blocks_query_points_start_end_indices;
     sort_query_points_to_blocks(
         input, make_float2(0.0f, 0.0f), make_float2(1.0f, 1.0f),
         sorted_query_point_indices, 
@@ -682,8 +684,8 @@ std::vector<torch::Tensor> periodic_primitives_backward_cuda(
     const bool gaussian_only
     ) {
         // Get sizes for the output
-        const int batch_size = input.size(0);
-        const int num_primitives = colors.size(0);
+        const auto batch_size = input.size(0);
+        const auto num_primitives = colors.size(0);
 
         // Set up gradient tensors
         auto dColors = torch::zeros_like(colors);
@@ -715,10 +717,10 @@ std::vector<torch::Tensor> periodic_primitives_backward_cuda(
             dScales.contiguous().data_ptr<float>(),
             dRotations.contiguous().data_ptr<float>(),
             dCoefficients.contiguous().data_ptr<float>(),
-            gaussian_instance_indices.contiguous().data_ptr<int>(),
-            block_start_end_index_gaussians.contiguous().data_ptr<int>(),
-            query_indices.contiguous().data_ptr<int>(),
-            block_start_end_index_query_points.contiguous().data_ptr<int>()
+            (uint32_t*)gaussian_instance_indices.contiguous().data_ptr<int>(),
+            (uint32_t*)block_start_end_index_gaussians.contiguous().data_ptr<int>(),
+            (uint32_t*)query_indices.contiguous().data_ptr<int>(),
+            (uint32_t*)block_start_end_index_query_points.contiguous().data_ptr<int>()
             );
     
         return {dColors, dPositions, dScales, dRotations, dCoefficients };

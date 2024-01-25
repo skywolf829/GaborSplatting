@@ -1,6 +1,14 @@
 #include <torch/extension.h>
 #include <vector>
 
+std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
+    auto lambda = [&t](size_t N) {
+        t.resize_({(long long)N});
+		return reinterpret_cast<char*>(t.contiguous().data_ptr());
+    };
+    return lambda;
+}
+
 std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     const torch::Tensor& input,                        // [N, n_dim]
     const torch::Tensor& colors,                       // [M, n_chan]
@@ -57,7 +65,16 @@ std::vector<torch::Tensor> periodic_primitives_forward(
     CHECK_INPUT(rotations);
     CHECK_INPUT(wave_coefficients);
     CHECK_INPUT(wave_coefficient_indices);
-    
+    /*
+    torch::Device device(torch::kCUDA);
+    torch::TensorOptions options(torch::kByte);
+
+    torch::Tensor queryPointBuffer = torch::empty({0}, options.device(device));
+    std::function<char*(size_t)> queryPointBufferFunct = resizeFunctional(queryPointBuffer);
+
+    torch::Tensor gaussiansBuffer = torch::empty({0}, options.device(device));
+    std::function<char*(size_t)> gaussiansBufferFunct = resizeFunctional(gaussiansBuffer);
+    */
     return periodic_primitives_forward_cuda(
         input, 
         colors,

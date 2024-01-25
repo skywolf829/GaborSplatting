@@ -7,6 +7,39 @@ data_folder = os.path.join(project_folder_path, "data")
 output_folder = os.path.join(project_folder_path, "output")
 save_folder = os.path.join(project_folder_path, "savedModels")
 
+def make_coord_grid(shape, device, flatten=True, align_corners=False, use_half=False):
+    """ 
+    Make coordinates at grid centers.
+    return (shape.prod, 3) matrix with (z,y,x) coordinate
+    """
+    coord_seqs = []
+    for i, n in enumerate(shape):
+        left = -1.0
+        right = 1.0
+        if(align_corners):
+            r = (right - left) / (n-1)
+            seq = left + r * \
+            torch.arange(0, n, 
+            device=device, 
+            dtype=torch.float32).float()
+
+        else:
+            r = (right - left) / (n+1)
+            seq :torch.Tensor = left + r + r * \
+            torch.arange(0, n, 
+            device=device, 
+            dtype=torch.float32).float()
+            
+        if(use_half):
+                seq = seq.half()
+        coord_seqs.append(seq)
+
+    ret = torch.meshgrid(*coord_seqs, indexing="ij")
+    ret = torch.stack(ret, dim=-1)
+    if(flatten):
+        ret = ret.view(-1, ret.shape[-1])
+    return ret.flip(-1)
+
 class ImageDataset(torch.utils.data.Dataset):
     """Face Landmarks dataset."""
 
@@ -21,45 +54,22 @@ class ImageDataset(torch.utils.data.Dataset):
         self.batch_size = opt['batch_size']
         self.device = opt['data_device']
         self.opt = opt
-        training_img = load_img(os.path.join(data_folder, opt['training_data']))
-        img_shape = list(training_img.shape)[0:2]
-        self.og_img_shape = list(training_img.shape)
+        self.img = torch.tensor(load_img(os.path.join(data_folder, opt['training_data'])), device=self.opt['data_device'])      
         
-        g_x = torch.arange(0, img_shape[0], dtype=torch.float32, device=self.device) / (img_shape[0]-1)
-        g_y = torch.arange(0, img_shape[1], dtype=torch.float32, device=self.device) / (img_shape[1]-1)
-        training_img_positions = torch.stack(torch.meshgrid([g_x, g_y], indexing='ij'), 
-                                            dim=-1).reshape(-1, 2).type(torch.float32)
-        training_img_colors = torch.tensor(training_img, dtype=torch.float32, device=self.device).reshape(-1,training_img.shape[-1])
-
-        self.x = training_img_positions
-        self.y = training_img_colors 
-        
-        max_img_reconstruction_dim_size = 1024    
-        xmin = self.x.min(dim=0).values
-        xmax = self.x.max(dim=0).values
-
-        img_scale = min(max_img_reconstruction_dim_size, max(img_shape))/max(img_shape)
-        self.training_preview_img_shape = [int(img_shape[i]*img_scale) for i in range(xmin.shape[0])]
-        g = [torch.linspace(xmin[i], xmax[i], self.training_preview_img_shape[i], device=self.device) for i in range(xmin.shape[0])]
-        self.training_preview_positions = torch.stack(torch.meshgrid(g, indexing='ij'), dim=-1).flatten(0, -2)
-
-        # Shuffle the training data once
-        idx = torch.randperm(len(self), device=self.device, dtype=torch.long)
-        self.training_samples = self.x.to(self.device)[idx]
-        self.training_colors = self.y.to(self.device)[idx]
-
-    def get_output_shape(self):
-        return self.og_img_shape
-
     def __len__(self):
-        return self.x.shape[0]
+        return self.opt['train_iterations']
+    
+    def shape(self):
+        return self.img.shape
 
     def __getitem__(self, idx):
-        if(self.batch_size < len(self)):
-            start = (self.batch_size*idx) % len(self)
-            end = min(len(self), start+self.batch_size)
-            return self.training_samples[start:end].to(self.opt['device']), \
-                self.training_colors[start:end].to(self.opt['device'])
-        else:
-            return self.x.to(self.opt['device']), self.y.to(self.opt['device'])
-    
+        points = torch.rand([self.opt['batch_size'], 2], 
+                dtype=torch.float32, device=self.opt['data_device'])*2 - 1
+        samples = torch.nn.functional.grid_sample(self.img.permute(2, 0, 1)[None,...], 
+                                                  points[None,None,...],
+                                                  mode="bilinear",
+                                                  align_corners=True)[0, :, 0, :].T
+        points += 1.
+        points /= 2.
+        return points.to(self.opt['device']), samples.to(self.opt['device'])
+        

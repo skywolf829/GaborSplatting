@@ -156,4 +156,6 @@ output/
 *.mp4
 *.gif
 *.json
-data/gigapixel.jpg
+data/tokyo_gigapixel.jpg
+old/
+savedModels/

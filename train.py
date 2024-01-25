@@ -1,14 +1,7 @@
 
-print("Loading HybridPrimitives CUDA kernel. May need to compile...")
-#from models.HybridPrimitives import HybridPrimitives
-from models.PeriodicPrimitives2D import PeriodicPrimitives2D
-print("Successfully loaded HybridPrimitives.")
-#from models.Siren import Siren
-from utils.data_generators import load_img
 import torch
 from torchmetrics.image import StructuralSimilarityIndexMeasure as ssim
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity as lpips
-import matplotlib.pyplot as plt
 import numpy as np
 import argparse
 import imageio.v3 as imageio
@@ -20,6 +13,9 @@ from datetime import datetime
 import os
 from utils.data_utils import str2bool
 from datasets.datasets import create_dataset
+from torch.utils.data import DataLoader
+import json
+from datasets.ImageDataset import make_coord_grid
 from models.models import create_model, load_model
 from models.options import Options, load_options, save_options, update_options_from_args
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
@@ -45,12 +41,13 @@ def log_scalars(writer, model, losses, i):
                             p, model.param_count())
     return p.item()
 
-def log_imgs(writer, model, dataset, g, img_shape, i):
+def log_imgs(writer, model, i, resolution=[768, 768], device="cuda"):
     with torch.no_grad():     
-        img = model(g).reshape(img_shape[0], img_shape[1], -1)
+        points = (make_coord_grid(resolution, device=device, align_corners=True)+1)/2
+        img = model(points).reshape(resolution[0], resolution[1], -1)
         img = to_img(img)
         writer.add_image('reconstruction', img, i, dataformats='HWC')
-        heatmap = model.vis_heatmap(g).reshape(img_shape[0], img_shape[1], -1)
+        heatmap = model.vis_heatmap(points).reshape(resolution[0], resolution[1], -1)
         heatmap = to_img(heatmap)
         writer.add_image('heatmap', heatmap, i, dataformats='HWC')
        
@@ -83,16 +80,23 @@ def train_model(model, dataset, opt):
                 with_stack=True,
         ) 
         
+    dataloader = DataLoader(dataset, batch_size=None, num_workers=8 if "cpu" in opt['data_device'] else 0)
+    dataloader = iter(dataloader)
+    torch.cuda.empty_cache()
+    max_VRAM = torch.cuda.max_memory_allocated(opt['device'])
+    torch.cuda.synchronize()
+    start_train_time = time.time()
+
+    # Train model
     for i in t:
         model.training_routine_updates(i, writer=writer)
 
-        x, y = dataset[i]
-
-        
+        x, y = next(dataloader)
         model.optimizer.zero_grad()
         losses, model_out = model.loss(x, y)
         losses['final_loss'].backward()
-        model.update_cumulative_gradients()
+        if i < opt['fine_tune_iterations']:
+            model.update_cumulative_gradients()
         model.optimizer.step()
             
         # logging
@@ -101,14 +105,21 @@ def train_model(model, dataset, opt):
             t.set_description(f"[{i+1}/{opt['train_iterations']}] PSNR: {p:0.04f}")
         # image logging
         if i % opt['log_image_every'] == 0 and i > 0:
-            log_imgs(writer, model, dataset, 
-                     dataset.training_preview_positions.to(opt['device']), 
-                     dataset.training_preview_img_shape, i)
+            log_imgs(writer, model, i)
             log_frequencies(writer, model, i)
         
         if(opt['profile']):
             profiler.step()
+        max_VRAM = max(max_VRAM, torch.cuda.max_memory_allocated(opt['device']))
 
+    dataloader = None
+    del dataloader
+    torch.cuda.synchronize()
+    end_train_time = time.time()
+    total_train_time = int(end_train_time - start_train_time)
+    max_VRAM_MB = int(max_VRAM/1000000)
+    print(f"Total train time: {int(total_train_time/60)}m {int(total_train_time%60)}s")
+    print(f"Max VRAM: {max_VRAM_MB}MB")
     if not os.path.exists(os.path.join(save_folder, save_name)):
         try:
             os.makedirs(os.path.join(save_folder, save_name))
@@ -116,39 +127,70 @@ def train_model(model, dataset, opt):
             print(f"Creation of the directory {os.path.join(save_folder, save_name)} failed")
     save_options(opt, os.path.join(save_folder, save_name))
     model.save(os.path.join(save_folder, save_name))
+    torch.cuda.empty_cache()
 
+    # Test model
     with torch.no_grad():
-        output = torch.empty(dataset.get_output_shape(), 
+        output = torch.empty(dataset.shape(), 
                              dtype=torch.float32, 
                              device=opt['data_device']).flatten(0,1)
 
-        max_batch = int((2**28) / 256.)
-        for i in range(0, len(dataset), max_batch):
-            end = min(output.shape[0], i+max_batch)
-            output[i:end] = model(dataset.x[i:end].to(opt['device'])).to(opt['data_device'])
-        final_im = to_img(output.reshape(dataset.get_output_shape()))
+        max_batch = int(2**28 / 64)
+        points = (make_coord_grid([dataset.shape()[0], dataset.shape()[1]], 
+            device=opt['data_device'], align_corners=True) + 1.)/2.
+        for i in tqdm(range(0, points.shape[0], max_batch), "Full reconstruction"):
+            end = min(points.shape[0], i+max_batch)
+            output[i:end] = model(points[i:end].to(opt['device'])).to(opt['data_device'])
+        output = output.reshape(dataset.shape())
+
+        print("Saving image...")
+        final_im = to_img(output)
         imageio.imwrite(os.path.join(output_folder, opt['save_name']+".jpg"), final_im)
         
-        p = psnr(output.to(opt['data_device']),dataset.y).item()
-        print(f"Final PSNR: {p:0.02f}")
-        writer.add_scalar("Params vs. PSNR", 
-                        p, model.param_count())
-        writer.add_scalar("Effective params vs. PSNR", 
-                        p, model.effective_param_count())
-        
-        writer.flush()
-        writer.close()
+        final_results = {}
+        err = ((output.to(opt['data_device']) - dataset.img)**2)
+        print("Saving error map...")
+        err_img = to_img(err.reshape(dataset.shape()))
+        del err
+        imageio.imwrite(os.path.join(output_folder, f"{save_name}_err.jpg"), err_img)
+        torch.cuda.empty_cache()
 
-        ssim_func = ssim(data_range=1.0).to(opt['data_device'])
-        s = ssim_func(output.to(opt['data_device']).reshape(dataset.get_output_shape()).permute(2,0,1)[None,...], 
-            dataset.y.reshape(dataset.get_output_shape()).permute(2,0,1)[None,...])
-        print(f"Final SSIM: {s:0.04f}")
-        lpips_func = lpips().to(opt['data_device'])        
-        l = lpips_func(output.to(opt['data_device']).reshape(dataset.get_output_shape()).permute(2,0,1)[None,...], 
-            dataset.y.reshape(dataset.get_output_shape()).permute(2,0,1)[None,...])
-        print(f"Final LPIPS: {l:0.04f}")
-        
+        print("Computing metrics:")
+        try:
+            p = psnr(output.to(opt['data_device']),dataset.img).item()
+            print(f"Final PSNR: {p:0.02f}")
+            final_results["PSNR"] = p
+            torch.cuda.empty_cache()
+            writer.add_scalar("Params vs. PSNR", 
+                            p, model.param_count())
+            writer.add_scalar("Effective params vs. PSNR", 
+                            p, model.effective_param_count())
+            
+            writer.flush()
+            writer.close()
+            if("cuda" in opt['data_device']):
+                ssim_func = ssim(data_range=1.0).to(opt['data_device'])
+                s = ssim_func(output.to(opt['data_device']).reshape(dataset.shape()).permute(2,0,1)[None,...], 
+                    dataset.img.permute(2,0,1)[None,...])
+                print(f"Final SSIM: {s:0.04f}")
+                final_results["SSIM"] = s.item()
+                torch.cuda.empty_cache()
+                lpips_func = lpips().to(opt['data_device'])        
+                l = lpips_func(output.to(opt['data_device']).reshape(dataset.shape()).permute(2,0,1)[None,...], 
+                    dataset.img.permute(2,0,1)[None,...])
+                print(f"Final LPIPS: {l:0.04f}")
+                final_results["LPIPS"] = l.item()
+        except:
+            print("Error caught, likely OOM")
 
+        total_params = model.param_count()
+        final_results['num_params'] = total_params
+        print(f"Total num params: {total_params:,}")
+        final_results['train_time'] = total_train_time
+        final_results['VRAM_MB'] = max_VRAM_MB
+        torch.cuda.empty_cache()
+        with open(os.path.join(save_folder, save_name, "results.json"), 'w') as fp:
+            json.dump(final_results, fp, indent=4)
 
 if __name__ == '__main__':
     
@@ -156,7 +198,6 @@ if __name__ == '__main__':
     np.random.seed(42)
 
     parser = argparse.ArgumentParser(description='Trains an implicit model on data.')
-
     parser.add_argument('--num_dims',default=None,type=int,
         help='Number of dimensions in the data')
     parser.add_argument('--num_outputs',default=None,type=int,
@@ -222,7 +263,6 @@ if __name__ == '__main__':
         opt['save_name'] = save_name
         dataset = create_dataset(opt)
         model = create_model(opt)
-
     train_model(model, dataset, opt)
 
     
