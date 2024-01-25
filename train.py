@@ -198,46 +198,42 @@ if __name__ == '__main__':
     np.random.seed(42)
 
     parser = argparse.ArgumentParser(description='Trains an implicit model on data.')
-    parser.add_argument('--num_dims',default=None,type=int,
-        help='Number of dimensions in the data')
     parser.add_argument('--num_outputs',default=None,type=int,
-        help='Number of output channels for the data (ex. 1 for scalar field, 3 for image or vector field)')
+        help='Number of output channels for the data (ex. 1 for grayscale, 3 for RGB)')
     parser.add_argument('--num_total_prims',default=None,type=int,
-        help='Number of gaussians to use')
+        help='Number of gaussians to reach by end of training')
     parser.add_argument('--num_starting_prims',default=None,type=int,
         help='Number of gaussians to use at start')
     parser.add_argument('--gaussian_only',default=None,type=str2bool,
-        help='Whether to use only gaussians or include the waveform part.')  
+        help='Whether to use only gaussians. False uses gabor.')  
     parser.add_argument('--max_frequency',default=None,type=float,
-        help='Maximum frequency for a primitive.') 
+        help='Maximum frequency for a primitive in Hz.') 
     parser.add_argument('--num_total_frequencies',default=None,type=int,
-        help='Total number of frequencies per primitive.') 
+        help='Total number of frequencies per primitive. Filter bank size.') 
     parser.add_argument('--num_frequencies',default=None,type=int,
-        help='Num top frequencies used in model.') 
+        help='Num top frequencies used in model. k value from paper.') 
     parser.add_argument('--training_data',default=None,type=str,
-        help='Data file name')
-    parser.add_argument('--training_data_type',default=None,type=str,
-        help='Type of training data. Either "image" or "scene".')
+        help='Data file name, assumed to be in data/ folder.')
     parser.add_argument('--save_name',default=None,type=str,
-        help='Save name for the model')
+        help='Save name for the model. Creates a folder in savedModels/ of this name')
     parser.add_argument('--batch_size',default=None,type=int,
-        help='Batch size per update')  
+        help='Batch size per step.')  
     parser.add_argument('--train_iterations',default=None,type=int,
         help='Number of iterations to train total')    
     parser.add_argument('--fine_tune_iterations',default=None,type=int,
-        help='Number of iterations to fine tune')    
+        help='Number of iterations to fine tune. Gaussians will stop splitting when there are this many iterations left.')    
     parser.add_argument('--split_every_iters',default=None,type=int,
         help='Iterations between gaussian splits')     
     parser.add_argument('--prune_every_iters',default=None,type=int,
         help='Iterations between gaussian pruning')  
     parser.add_argument('--blackout_every_iters',default=None,type=int,
-        help='Iterations between blackouts')  
+        help='Iterations between blackouts (sets color values near zero)')  
     parser.add_argument('--device',default=None,type=str,
-        help='Which device to train on')
+        help='Which device to train on/where the model resides')
     parser.add_argument('--data_device',default=None,type=str,
-        help='Which device to host training data on')
+        help='Which device to host training data on. Useful for very large images (gigapixel)')
     parser.add_argument('--load_from',default=None,type=str,
-        help='Where to load data from')
+        help='Where to load model data from')
     args = vars(parser.parse_args())
     
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
