@@ -145,14 +145,14 @@ def train_model(model, dataset, opt):
 
         print("Saving image...")
         final_im = to_img(output)
-        imageio.imwrite(os.path.join(output_folder, opt['save_name']+".jpg"), final_im)
+        imageio.imwrite(os.path.join(output_folder, opt['save_name']+".png"), final_im)
         
         final_results = {}
         err = ((output.to(opt['data_device']) - dataset.img)**2)
         print("Saving error map...")
         err_img = to_img(err.reshape(dataset.shape()))
         del err
-        imageio.imwrite(os.path.join(output_folder, f"{save_name}_err.jpg"), err_img)
+        imageio.imwrite(os.path.join(output_folder, f"{save_name}_err.png"), err_img)
         torch.cuda.empty_cache()
 
         print("Computing metrics:")

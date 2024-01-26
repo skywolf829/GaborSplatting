@@ -11,8 +11,8 @@
 namespace cg = cooperative_groups;
 
 #define FORWARD_NUM_THREADS 512
-#define TOTAL_NUM_FREQUENCIES 128
-#define SELECTED_NUM_FREQUENCIES 1
+#define TOTAL_NUM_FREQUENCIES 16       // Best is 16
+#define SELECTED_NUM_FREQUENCIES 2      // Best is 2
 #define NUM_CHANNELS 3
 #define NUM_DIMENSIONS 2
 #define BLOCKS_X 16

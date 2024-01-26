@@ -5,11 +5,11 @@ import imageio.v3 as imageio
 from models.options import load_options
 import json
 from matplotlib.ticker import FuncFormatter
-
+import matplotlib.pyplot as plt
 
 project_folder_path = os.path.dirname(os.path.abspath(__file__))
 output_folder = os.path.join(project_folder_path, "output")
-save_folder = os.path.join(project_folder_path, "savedModels", "param_comparison")
+save_folder = os.path.join(project_folder_path, "savedModels")
 
 def millions(x, pos):
     'The two args are the value and tick position'
@@ -109,7 +109,6 @@ def generate_charts():
     
     for image_name in results.keys():
         plot_chart(image_name, results[image_name])
-
 
 def crop_imgs():
     import PIL.Image
@@ -221,5 +220,101 @@ def crop_imgs():
     imageio.imwrite(os.path.join(output_folder, "crops", "gigapixel", "gigapixel_gaussians_c2.png"), gigapixel_gaussians_c2)
     imageio.imwrite(os.path.join(output_folder, "crops", "gigapixel", "gigapixel_ours_c2.png"), gigapixel_ours_c2)
 
+def avg_metrics_F_test():
+    fold = os.path.join(save_folder, "F_test")
+    metrics = {}
+    for model in os.listdir(fold):
+        if(".txt" in model):
+            continue
+        k = int(model.split("_")[-1])
+        if k not in metrics.keys():
+            metrics[k] = {"n": 0}
+        fp = open(os.path.join(fold, model, "results.json"))
+        result = json.load(fp)
+        fp.close()
 
-generate_charts()
+        for key in result.keys():
+            if key not in metrics[k].keys():
+                metrics[k][key] = 0
+            metrics[k][key] += float(result[key])
+        metrics[k]['n'] += 1
+    
+    for k in metrics.keys():
+        print(f"F={k}")
+        n = metrics[k]["n"]
+        for key in metrics[k]:
+            print(f"Average {key}: {metrics[k][key]/n : 0.03f}")
+
+        print()
+
+def avg_metrics_k_test():
+    fold = os.path.join(save_folder, "k_test")
+    metrics = {}
+    for model in os.listdir(fold):
+        if(".txt" in model):
+            continue
+        k = int(model.split("_")[-1])
+        if k not in metrics.keys():
+            metrics[k] = {"n": 0}
+        fp = open(os.path.join(fold, model, "results.json"))
+        result = json.load(fp)
+        fp.close()
+
+        for key in result.keys():
+            if key not in metrics[k].keys():
+                metrics[k][key] = 0
+            metrics[k][key] += float(result[key])
+        metrics[k]['n'] += 1
+    
+    for k in metrics.keys():
+        print(f"k={k}")
+        n = metrics[k]["n"]
+        for key in metrics[k]:
+            print(f"Average {key}: {metrics[k][key]/n : 0.03f}")
+
+        print()
+
+def avg_metrics_max_freq_test():
+    fold = os.path.join(save_folder, "max_frequency_test")
+    metrics = {}
+    for model in os.listdir(fold):
+        if(".txt" in model):
+            continue
+        k = int(model.split("_")[-1])
+        if k not in metrics.keys():
+            metrics[k] = {"n": 0}
+        fp = open(os.path.join(fold, model, "results.json"))
+        result = json.load(fp)
+        fp.close()
+
+        for key in result.keys():
+            if key not in metrics[k].keys():
+                metrics[k][key] = 0
+            metrics[k][key] += float(result[key])
+        metrics[k]['n'] += 1
+    
+    for k in metrics.keys():
+        print(f"freq={k}")
+        n = metrics[k]["n"]
+        for key in metrics[k]:
+            print(f"Average {key}: {metrics[k][key]/n : 0.03f}")
+
+        print()
+
+def create_gabor():
+    x = np.linspace(-1.0, 1.0, 512)[None,:].repeat(512, 0)
+    y = np.linspace(-1.0, 1.0, 512)[:,None].repeat(512, 1)
+    xy = np.stack([x,y], axis=-1)
+    print(xy.shape)
+    g = np.exp(-(xy[:,:,0]*xy[:,:,0] + xy[:,:,1]*xy[:,:,1])/0.1)
+    s = np.sin(16*(xy[:,:,0]*np.cos(2.1)+xy[:,:,1]*np.sin(2.1)))
+    gab = g * s
+    plt.imshow(gab, cmap="bwr")
+    plt.show()
+    
+
+#generate_charts()
+avg_metrics_F_test()    
+#avg_metrics_k_test()
+#avg_metrics_max_freq_test()    
+#create_gabor()

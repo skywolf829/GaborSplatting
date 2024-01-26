@@ -1,25 +1,40 @@
-#!/bin/sh
+python train.py --training_data baboon.jpg                  --num_total_prims 250000 --save_name baboon_freq_test_256 --max_frequency 256
+python train.py --training_data cameras.jpg                 --num_total_prims 250000 --save_name cameras_freq_test_256 --max_frequency 256
+python train.py --training_data lighthouse.jpg              --num_total_prims 250000 --save_name lighthouse_freq_test_256 --max_frequency 256
+python train.py --training_data newyork.jpg                 --num_total_prims 250000 --save_name newyork_freq_test_256 --max_frequency 256
+python train.py --training_data stainedglass.jpg            --num_total_prims 250000 --save_name stainedglass_freq_test_256 --max_frequency 256
+python train.py --training_data trees.jpeg                  --num_total_prims 250000 --save_name trees_freq_test_256 --max_frequency 256
+python train.py --training_data girlwithpearlearring.jpg    --num_total_prims 250000 --save_name earring_freq_test_256 --max_frequency 256
+python train.py --training_data pluto.png                   --num_total_prims 250000 --save_name pluto_freq_test_256 --max_frequency 256
+#python train.py --training_data tokyo_gigapixel.jpg         --num_total_prims 250000 --save_name tokyo_freq_test_256 --max_frequency 256 --data_device cpu
 
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 50000 --save_name earring_50000_128Hz
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 100000 --save_name earring_100000_128Hz
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 400000 --save_name earring_400000_128Hz
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 700000 --save_name earring_700000_128Hz
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 1000000 --save_name earring_1000000_128Hz
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 1250000 --save_name earring_1250000_128Hz
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 1350000 --save_name earring_1350000_128Hz
+python train.py --training_data baboon.jpg                  --num_total_prims 250000 --save_name baboon_freq_test_128 --max_frequency 128
+python train.py --training_data cameras.jpg                 --num_total_prims 250000 --save_name cameras_freq_test_128 --max_frequency 128
+python train.py --training_data lighthouse.jpg              --num_total_prims 250000 --save_name lighthouse_freq_test_128 --max_frequency 128
+python train.py --training_data newyork.jpg                 --num_total_prims 250000 --save_name newyork_freq_test_128 --max_frequency 128
+python train.py --training_data stainedglass.jpg            --num_total_prims 250000 --save_name stainedglass_freq_test_128 --max_frequency 128
+python train.py --training_data trees.jpeg                  --num_total_prims 250000 --save_name trees_freq_test_128 --max_frequency 128
+python train.py --training_data girlwithpearlearring.jpg    --num_total_prims 250000 --save_name earring_freq_test_128 --max_frequency 128
+python train.py --training_data pluto.png                   --num_total_prims 250000 --save_name pluto_freq_test_128 --max_frequency 128
+#python train.py --training_data tokyo_gigapixel.jpg         --num_total_prims 250000 --save_name tokyo_freq_test_128 --max_frequency 128 --data_device cpu
 
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 50000 --save_name earring_50000_64Hz --max_frequency 64
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 100000 --save_name earring_100000_64Hz --max_frequency 64
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 400000 --save_name earring_400000_64Hz --max_frequency 64
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 700000 --save_name earring_700000_64Hz --max_frequency 64
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 1000000 --save_name earring_1000000_64Hz --max_frequency 64
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 1250000 --save_name earring_1250000_64Hz --max_frequency 64
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 1350000 --save_name earring_1350000_64Hz --max_frequency 64
+python train.py --training_data baboon.jpg                  --num_total_prims 250000 --save_name baboon_freq_test_64 --max_frequency 64
+python train.py --training_data cameras.jpg                 --num_total_prims 250000 --save_name cameras_freq_test_64 --max_frequency 64
+python train.py --training_data lighthouse.jpg              --num_total_prims 250000 --save_name lighthouse_freq_test_64 --max_frequency 64
+python train.py --training_data newyork.jpg                 --num_total_prims 250000 --save_name newyork_freq_test_64 --max_frequency 64
+python train.py --training_data stainedglass.jpg            --num_total_prims 250000 --save_name stainedglass_freq_test_64 --max_frequency 64
+python train.py --training_data trees.jpeg                  --num_total_prims 250000 --save_name trees_freq_test_64 --max_frequency 64
+python train.py --training_data girlwithpearlearring.jpg    --num_total_prims 250000 --save_name earring_freq_test_64 --max_frequency 64
+python train.py --training_data pluto.png                   --num_total_prims 250000 --save_name pluto_freq_test_64 --max_frequency 64
+#python train.py --training_data tokyo_gigapixel.jpg         --num_total_prims 250000 --save_name tokyo_freq_test_64 --max_frequency 64 --data_device cpu
 
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 50000 --save_name earring_50000_32Hz --max_frequency 32
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 100000 --save_name earring_100000_32Hz --max_frequency 32
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 400000 --save_name earring_400000_32Hz --max_frequency 32
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 700000 --save_name earring_700000_32Hz --max_frequency 32
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 1000000 --save_name earring_1000000_32Hz --max_frequency 32
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 1250000 --save_name earring_1250000_32Hz --max_frequency 32
-python train.py --training_data girlwithpearlearring.jpg --num_total_prims 1350000 --save_name earring_1350000_32Hz --max_frequency 32
+python train.py --training_data baboon.jpg                  --num_total_prims 250000 --save_name baboon_freq_test_32 --max_frequency 32
+python train.py --training_data cameras.jpg                 --num_total_prims 250000 --save_name cameras_freq_test_32 --max_frequency 32
+python train.py --training_data lighthouse.jpg              --num_total_prims 250000 --save_name lighthouse_freq_test_32 --max_frequency 32
+python train.py --training_data newyork.jpg                 --num_total_prims 250000 --save_name newyork_freq_test_32 --max_frequency 32
+python train.py --training_data stainedglass.jpg            --num_total_prims 250000 --save_name stainedglass_freq_test_32 --max_frequency 32
+python train.py --training_data trees.jpeg                  --num_total_prims 250000 --save_name trees_freq_test_32 --max_frequency 32
+python train.py --training_data girlwithpearlearring.jpg    --num_total_prims 250000 --save_name earring_freq_test_32 --max_frequency 32
+python train.py --training_data pluto.png                   --num_total_prims 250000 --save_name pluto_freq_test_32 --max_frequency 32
+#python train.py --training_data tokyo_gigapixel.jpg         --num_total_prims 250000 --save_name tokyo_freq_test_32 --max_frequency 32 --data_device cpu
+

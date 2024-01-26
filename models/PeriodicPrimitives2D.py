@@ -279,6 +279,30 @@ class PeriodicPrimitives2D(torch.nn.Module):
             self.cumulative_gradients += torch.norm(self.gaussian_positions.grad, dim=1)
             self.cumulative_gradients += torch.norm(self.gaussian_scales.grad, dim=1)
 
+    def replace_optimizer_tensors(self, tensors_dict):
+        optimizable_tensors = {}
+        for group in self.optimizer.param_groups:
+            if(group['name'] in tensors_dict):
+                assert len(group["params"]) == 1
+                extension_tensor = tensors_dict[group["name"]]
+                if extension_tensor is None:
+                    continue
+                stored_state = self.optimizer.state.get(group['params'][0], None)
+                if stored_state is not None:
+
+                    stored_state["exp_avg"] = torch.zeros_like(extension_tensor)
+                    stored_state["exp_avg_sq"] = torch.zeros_like(extension_tensor)
+
+                    del self.optimizer.state[group['params'][0]]
+                    group["params"][0] = Parameter(extension_tensor).requires_grad_(True)
+                    self.optimizer.state[group['params'][0]] = stored_state
+
+                    optimizable_tensors[group["name"]] = group["params"][0]
+                else:
+                    group["params"][0] = Parameter(extension_tensor).requires_grad_(True)
+                    optimizable_tensors[group["name"]] = group["params"][0]
+        return optimizable_tensors
+
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
@@ -366,20 +390,7 @@ class PeriodicPrimitives2D(torch.nn.Module):
 
     def load(self, path):
         with torch.no_grad():
-            '''
-            dict = torch.load(os.path.join(path, "model.ckpt"))
-            for name in dict:
-                if name == "gaussian_colors":
-                    self.gaussian_colors = Parameter(dict[name])
-                if name == "gaussian_positions":
-                    self.gaussian_positions = Parameter(dict[name])
-                if name == "gaussian_scales":
-                    self.gaussian_scales = Parameter(dict[name])
-                if name == "gaussian_rotations":
-                    self.gaussian_rotations = Parameter(dict[name])
-                if name == "wave_coefficients":
-                    self.wave_coefficients = Parameter(dict[name])
-            '''
+            
             data = np.load(os.path.join(path, "model.ckpt.npz"))
             c = torch.tensor(data['colors'], device=self.opt['device'])
             p = torch.tensor(data['positions'], device=self.opt['device'])
@@ -398,7 +409,7 @@ class PeriodicPrimitives2D(torch.nn.Module):
                 "gaussian_rotations": r,
                 "wave_coefficients": f
             }
-            updated_params = self.cat_tensors_to_optimizer(tensor_dict)
+            updated_params = self.replace_optimizer_tensors(tensor_dict)
 
             self.gaussian_colors = updated_params['gaussian_colors']
             self.gaussian_positions = updated_params['gaussian_positions']
@@ -408,9 +419,7 @@ class PeriodicPrimitives2D(torch.nn.Module):
             if(not self.opt['gaussian_only']):
                 self.wave_coefficients = updated_params['wave_coefficients']
                 self.wave_coefficient_indices = i
-            self.cumulative_gradients = torch.cat([self.cumulative_gradients, 
-                torch.empty([c.shape[0]], device=self.opt['device'], dtype=torch.float32)])
-            self.cumulative_gradients.zero_()
+            self.cumulative_gradients = torch.zeros([c.shape[0]], device=self.opt['device'], dtype=torch.float32)
 
         print("Successfully loaded trained model.")
         self.loaded = True
@@ -488,7 +497,7 @@ class PeriodicPrimitives2D(torch.nn.Module):
         return losses, model_out
 
     def get_topk_waves(self):
-        if(self.training and not self.loaded):
+        if(not self.loaded):
             coefficients_to_send, indices_to_send = torch.topk(torch.abs(self.wave_coefficients),
                                     self.opt['num_frequencies'], dim=1, sorted=False)
             coefficients_to_send = coefficients_to_send * torch.gather(self.wave_coefficients.sign(), dim=1, index=indices_to_send)
@@ -499,8 +508,8 @@ class PeriodicPrimitives2D(torch.nn.Module):
             #indices_to_send = indices_to_send.type(torch.int)
         else:
             # not implemented yet
-            coefficients_to_send = self.wave_coefficients
-            indices_to_send = self.wave_coefficient_indices
+            coefficients_to_send = self.wave_coefficients if not self.opt['gaussian_only'] else torch.empty([0, 0], device=self.opt['device'])
+            indices_to_send = self.wave_coefficient_indices if not self.opt['gaussian_only'] else torch.empty([0, 0], dtype=torch.int32, device=self.opt['device'])
         
         return coefficients_to_send, indices_to_send
 

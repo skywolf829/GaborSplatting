@@ -10,8 +10,8 @@ def create_model(opt):
     if(opt['num_dims'] == 2):
         return PeriodicPrimitives2D(opt)
     
-def load_model(opt):
+def load_model(opt, location):
     if(opt['num_dims'] == 2):
         model = PeriodicPrimitives2D(opt)
-    model.load(os.path.join(save_folder, opt['save_name']))
+    model.load(location)
     return model

@@ -14,9 +14,9 @@ class Options():
         opt['num_starting_prims']                   = 10000      
         opt['num_total_prims']                      = 100000
 
-        opt['max_frequency']                        = 128    # 64 best 
-        opt['num_frequencies']                      = 1     # 2 best    # REQUIRES RECOMPILATION OF CUDA CODE
-        opt['num_total_frequencies']                = 128    # 16 best  # REQUIRES RECOMPILATION OF CUDA CODE
+        opt['max_frequency']                        = 64       # 64 best 
+        opt['num_frequencies']                      = 2        # 2 best    # REQUIRES RECOMPILATION OF CUDA CODE
+        opt['num_total_frequencies']                = 16       # 16 best  # REQUIRES RECOMPILATION OF CUDA CODE
         opt['gaussian_only']                        = False
 
         opt['train_iterations']                     = 30000
