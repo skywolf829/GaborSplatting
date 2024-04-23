@@ -48,8 +48,9 @@ def log_imgs(writer, model, i, resolution=[768, 768], device="cuda"):
         img = to_img(img)
         writer.add_image('reconstruction', img, i, dataformats='HWC')
         heatmap = model.vis_heatmap(points).reshape(resolution[0], resolution[1], -1)
-        heatmap = to_img(heatmap)
-        writer.add_image('heatmap', heatmap, i, dataformats='HWC')
+        if heatmap is not None:
+            heatmap = to_img(heatmap)
+            writer.add_image('heatmap', heatmap, i, dataformats='HWC')
        
 def log_frequencies(writer, model, i):
     if(not model.opt['gaussian_only']):
@@ -100,11 +101,11 @@ def train_model(model, dataset, opt):
         model.optimizer.step()
             
         # logging
-        if i % opt['log_every'] == 0:
+        if opt['log_every'] > 0 and i % opt['log_every'] == 0:
             p = log_scalars(writer, model, losses, i)
             t.set_description(f"[{i+1}/{opt['train_iterations']}] PSNR: {p:0.04f}")
         # image logging
-        if i % opt['log_image_every'] == 0 and i > 0:
+        if opt['log_image_every'] > 0 and i % opt['log_image_every'] == 0 and i > 0:
             log_imgs(writer, model, i)
             log_frequencies(writer, model, i)
         
@@ -143,16 +144,16 @@ def train_model(model, dataset, opt):
             output[i:end] = model(points[i:end].to(opt['device'])).to(opt['data_device'])
         output = output.reshape(dataset.shape())
 
-        print("Saving image...")
-        final_im = to_img(output)
-        imageio.imwrite(os.path.join(output_folder, opt['save_name']+".png"), final_im)
+        #print("Saving image...")
+        #final_im = to_img(output)
+        #imageio.imwrite(os.path.join(output_folder, opt['save_name']+".png"), final_im)
         
         final_results = {}
-        err = ((output.to(opt['data_device']) - dataset.img)**2)
-        print("Saving error map...")
-        err_img = to_img(err.reshape(dataset.shape()))
-        del err
-        imageio.imwrite(os.path.join(output_folder, f"{save_name}_err.png"), err_img)
+        #err = ((output.to(opt['data_device']) - dataset.img)**2)
+        #print("Saving error map...")
+        #err_img = to_img(err.reshape(dataset.shape()))
+        #del err
+        #imageio.imwrite(os.path.join(output_folder, f"{save_name}_err.png"), err_img)
         torch.cuda.empty_cache()
 
         print("Computing metrics:")
@@ -168,20 +169,32 @@ def train_model(model, dataset, opt):
             
             writer.flush()
             writer.close()
-            if("cuda" in opt['data_device']):
-                ssim_func = ssim(data_range=1.0).to(opt['data_device'])
-                s = ssim_func(output.to(opt['data_device']).reshape(dataset.shape()).permute(2,0,1)[None,...], 
-                    dataset.img.permute(2,0,1)[None,...])
-                print(f"Final SSIM: {s:0.04f}")
-                final_results["SSIM"] = s.item()
-                torch.cuda.empty_cache()
-                lpips_func = lpips().to(opt['data_device'])        
-                l = lpips_func(output.to(opt['data_device']).reshape(dataset.shape()).permute(2,0,1)[None,...], 
-                    dataset.img.permute(2,0,1)[None,...])
-                print(f"Final LPIPS: {l:0.04f}")
-                final_results["LPIPS"] = l.item()
+
+            ssim_func = ssim(data_range=1.0).to(opt['device'])        
+            lpips_func = lpips().to(opt['device'])        
+
+            output = output.reshape(dataset.shape()).permute(2,0,1)[None,...]
+            dataset.img = dataset.img.permute(2,0,1)[None,...]
+
+            iters = 0
+            ssim_sum = 0.
+            lpips_sum = 0.
+
+            for y in range(0, output.shape[2], 2048):
+                y_max = min(output.shape[2], y+2048)
+                for x in range(0, output.shape[3], 2048):
+                    x_max = min(output.shape[3], x+2048)
+
+                    output_batch = output[:,:,y:y_max,x:x_max].to(opt['device'])
+                    img_batch = dataset.img[:,:,y:y_max,x:x_max].to(opt['device'])
+                    ssim_sum += ssim_func(output_batch, img_batch)
+                    lpips_sum += lpips_func(output_batch, img_batch)
+                    iters += 1
         except:
             print("Error caught, likely OOM")
+        
+        print(f"Final SSIM: {ssim_sum/iters:0.03f}")
+        print(f"Final LPIPS: {lpips_sum/iters:0.03f}")
 
         total_params = model.param_count()
         final_results['num_params'] = total_params
@@ -198,6 +211,8 @@ if __name__ == '__main__':
     np.random.seed(42)
 
     parser = argparse.ArgumentParser(description='Trains an implicit model on data.')
+    parser.add_argument('--model',default=None,type=str,
+        help='Model type. "Splats" or "iNGP"')
     parser.add_argument('--num_outputs',default=None,type=int,
         help='Number of output channels for the data (ex. 1 for grayscale, 3 for RGB)')
     parser.add_argument('--num_total_prims',default=None,type=int,
@@ -234,6 +249,10 @@ if __name__ == '__main__':
         help='Which device to host training data on. Useful for very large images (gigapixel)')
     parser.add_argument('--load_from',default=None,type=str,
         help='Where to load model data from')
+    parser.add_argument('--log_every',default=None,type=int,
+        help='How often to log metrics')  
+    parser.add_argument('--log_image_every',default=None,type=int,
+        help='How often to log image.')  
     args = vars(parser.parse_args())
     
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"

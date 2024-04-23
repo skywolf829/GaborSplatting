@@ -3,24 +3,27 @@ channels:
   - pytorch
   - conda-forge
   - defaults
+  - nvidia
+  - anaconda
 dependencies:
-  - cudatoolkit=11.6
+  - python=3.10  
+  - pip
   - imageio
   - numpy
-  - python=3.7
-  - pip=22.3.1
-  - pytorch=1.12.1
-  - torchaudio=0.12.1
-  - torchvision=0.13.1
+  - pytorch=2.1.1
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=12.1
   - scikit-image
   - scipy
-  - tqdm=4.66
-  - typing_extensions=4.7.1
+  - tqdm
+  - typing_extensions
   - pip:
-      - matplotlib==3.5.3
-      - oauthlib==3.2.2
-      - packaging==23.2
+      - matplotlib
+      - oauthlib
+      - packaging
       - CUDA_modules/PeriodicPrimitivesCUDA
-      - tensorboard==2.11.2
-      - torchmetrics==0.11.4
+      - tensorboard
+      - torchmetrics
       - lpips
+      - git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch

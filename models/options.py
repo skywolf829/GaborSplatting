@@ -6,6 +6,7 @@ class Options():
         opt = {}
 
         # For descriptions of all variables, see train.py
+        opt['model']                                = "splats"
         opt['num_dims']                             = 2       
         opt['num_outputs']                          = 3
         opt['training_data']                        = "pluto.png"
@@ -20,7 +21,7 @@ class Options():
         opt['gaussian_only']                        = False
 
         opt['train_iterations']                     = 30000
-        opt['batch_size']                           = 100000  
+        opt['batch_size']                           = 2**18  
         opt['fine_tune_iterations']                 = 15000
         opt['split_every_iters']                    = 1000
         opt['prune_every_iters']                    = 100

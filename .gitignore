@@ -157,5 +157,7 @@ output/
 *.gif
 *.json
 data/tokyo_gigapixel.jpg
+data/ParisMap_giga.jpg
+data/girlwithpearlearring_giga.jpg
 old/
 savedModels/
