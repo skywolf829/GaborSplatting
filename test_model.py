@@ -95,7 +95,7 @@ def quant_metrics(model, dataset):
             end = min(points.shape[0], i+max_batch)
             output[i:end] = model(points[i:end].to(opt['device'])).to(opt['data_device'])
         output = output.reshape(dataset.shape())
-
+        del points
         p = psnr(output.to(opt['data_device']),dataset.img).item()
         print(f"Final PSNR: {p:0.02f}")
         torch.cuda.empty_cache()
@@ -135,8 +135,8 @@ if __name__ == '__main__':
     #training_img = load_img(os.path.join(data_folder, img_name))
     #img_shape = list(training_img.shape)[0:2]
 
-    model_name = "tokyo_Gaussian"
-    location = os.path.join(save_folder, "giga_baseline",
+    model_name = "MtCook_Gabor"
+    location = os.path.join(save_folder, 
                        model_name)
     opt = load_options(location)
     dataset = create_dataset(opt)

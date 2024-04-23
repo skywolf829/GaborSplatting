@@ -18,6 +18,6 @@ def load_model(opt, location):
     if(opt['model'] == "splats"):
         model = PeriodicPrimitives2D(opt)
     elif(opt['model'] == "iNGP"):
-        model = iNGP()
+        model = iNGP(opt)
     model.load(location)
     return model
