@@ -282,7 +282,115 @@ __global__ void periodic_primitives_forward_cuda_kernel(
     }
 }
 
+__global__ void periodic_primitives_kernel_vis_cuda_kernel(  
+    int num_query_points, int num_gaussians, int num_gaussian_instances,   
+    float max_frequency, bool gaussian_only,
+    const float alpha, const float cutoff,
+    const float* __restrict__ input,
+    const float* __restrict__ colors,
+    const float* __restrict__ positions,
+    const float* __restrict__ scales,
+    const float* __restrict__ rotations,
+    const float* __restrict__ wave_coefficients,
+    const int* __restrict__ wave_coefficient_indices,
+    const uint32_t* __restrict__ gaussian_instance_indices,
+    const uint32_t* __restrict__ block_start_end_index_gaussians,
+    const uint32_t* __restrict__ query_indices,
+    const uint32_t* __restrict__ block_start_end_index_query_points,
+    float* __restrict__ output
+    ) {
 
+    // Get block/thread related numbers   
+    const auto threadID = threadIdx.x;
+    const auto block_x = blockIdx.x;
+    const auto block_y = blockIdx.y;
+    const auto this_block_idx = BLOCKS_X*block_y + block_x;
+
+    auto query_point_start_idx = block_start_end_index_query_points[2*this_block_idx];
+    auto query_point_end_idx = block_start_end_index_query_points[2*this_block_idx+1];
+    auto gaussian_start_idx = block_start_end_index_gaussians[2*this_block_idx];
+    auto gaussian_end_idx = block_start_end_index_gaussians[2*this_block_idx+1];
+
+    // return if no query points or gaussians in this block
+    if(query_point_start_idx == query_point_end_idx || gaussian_start_idx == gaussian_end_idx) return;
+
+    __shared__ float gaussian_positions[FORWARD_NUM_THREADS][2];
+    __shared__ float gaussian_scales[FORWARD_NUM_THREADS][2];
+    __shared__ float gaussian_rotations[FORWARD_NUM_THREADS];
+    __shared__ float gaussian_colors[FORWARD_NUM_THREADS][3];
+    __shared__ float coefficients[FORWARD_NUM_THREADS][SELECTED_NUM_FREQUENCIES];
+    __shared__ int coefficient_indices[FORWARD_NUM_THREADS][SELECTED_NUM_FREQUENCIES];
+    
+    int num_point_batchs = 1 + (gaussian_end_idx - gaussian_start_idx) / FORWARD_NUM_THREADS;
+    
+
+    for(int batch = 0; batch < num_point_batchs; batch++){
+
+        int end_idx_this_batch = min(FORWARD_NUM_THREADS, gaussian_end_idx-gaussian_start_idx-batch*FORWARD_NUM_THREADS);
+
+        // Each thread loads a part of global memory to shared (random reads)
+        int collect_idx = gaussian_start_idx + batch*FORWARD_NUM_THREADS + threadID;
+        __syncthreads();
+        if(collect_idx < num_gaussian_instances){
+            int idx = gaussian_instance_indices[collect_idx];
+            gaussian_positions[threadID][0] = positions[2*idx];
+            gaussian_positions[threadID][1] = positions[2*idx+1];
+            gaussian_scales[threadID][0] = scales[2*idx];
+            gaussian_scales[threadID][1] = scales[2*idx+1];
+            gaussian_colors[threadID][0] = colors[3*idx];
+            gaussian_colors[threadID][1] = colors[3*idx+1];
+            gaussian_colors[threadID][2] = colors[3*idx+2];
+            gaussian_rotations[threadID] = rotations[idx];
+            for(int i = 0; i < SELECTED_NUM_FREQUENCIES && !gaussian_only; i++){
+                coefficients[threadID][i] = wave_coefficients[idx*SELECTED_NUM_FREQUENCIES+i];
+                coefficient_indices[threadID][i] = wave_coefficient_indices[idx*SELECTED_NUM_FREQUENCIES+i];
+            }
+        }
+        __syncthreads();
+        // Iterate over all query points this thread is responsible for
+        // Update its value according to the currently cached gaussians
+        for(auto i = query_point_start_idx+threadID; i < query_point_end_idx; i += FORWARD_NUM_THREADS){
+            
+            auto real_query_index = query_indices[i];
+            float2 x = {input[2*real_query_index], input[2*real_query_index+1]};
+
+            float4 temp_c = make_float4(output[0*num_query_points+real_query_index],
+                                output[1*num_query_points+real_query_index],
+                                output[2*num_query_points+real_query_index],
+                                output[3*num_query_points+real_query_index]);
+
+            for(auto j = 0; j < end_idx_this_batch; j++){
+
+                float2 dx = x - make_float2(gaussian_positions[j][0], gaussian_positions[j][1]);
+                float cosr = __cosf(gaussian_rotations[j]);
+                float sinr = __sinf(gaussian_rotations[j]);
+                float2 tx = { gaussian_scales[j][0]*(dx.x*cosr  + dx.y*sinr),
+                            gaussian_scales[j][1]*(dx.x*-sinr + dx.y*cosr) };
+                float g = __expf(-(tx.x*tx.x + tx.y*tx.y)/2);
+                float w = 0.0f;
+                for(int w_idx = 0; w_idx < SELECTED_NUM_FREQUENCIES && !gaussian_only; w_idx++){
+                    float f = max_frequency*(coefficient_indices[j][w_idx])/(float)TOTAL_NUM_FREQUENCIES;
+                    // old (radial)
+                    //w += coefficients[j][w_idx]*__cosf(f*(1-g));
+                    w += 0.5f+0.5f*__cosf(f*tx.x);
+                }            
+                if(!gaussian_only) g *= w;
+                
+                if(g>cutoff){    
+                    // https://web.cse.ohio-state.edu/~parent.1/classes/581/Lectures/13.TransparencyHandout.pdf
+                    temp_c.x = temp_c.x*(1-alpha)*temp_c.w + gaussian_colors[j][0]*alpha;
+                    temp_c.y = temp_c.y*(1-alpha)*temp_c.w + gaussian_colors[j][1]*alpha;
+                    temp_c.z = temp_c.z*(1-alpha)*temp_c.w + gaussian_colors[j][2]*alpha;
+                    temp_c.w = temp_c.w*(1-alpha) + alpha; 
+                }
+            }
+            output[0*num_query_points+real_query_index] = temp_c.x;
+            output[1*num_query_points+real_query_index] = temp_c.y;
+            output[2*num_query_points+real_query_index] = temp_c.z;
+            output[3*num_query_points+real_query_index] = temp_c.w;
+        }      
+    }
+}
 
 __global__ void periodic_primitives_backward_cuda_kernel(
     const int num_primitives,
@@ -664,6 +772,83 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
         blocks_gaussian_start_end_indices_tensor, 
         sorted_query_point_indices_tensor,
         blocks_query_points_start_end_indices_tensor};
+}
+
+torch::Tensor periodic_primitives_kernel_vis_cuda(
+    const torch::Tensor& input,                        // [N, n_dim]
+    const torch::Tensor& colors,                       // [M, n_chan]
+    const torch::Tensor& positions,                    // [M, n_dim]
+    const torch::Tensor& scales,                       // [M, n_dim]
+    const torch::Tensor& rotations,                    // [M, 1]
+    const torch::Tensor& wave_coefficients,            // [M, n_freqs, n_dim]
+    const torch::Tensor& wave_coefficient_indices,    // [M, n_freqs, n_dim]
+    const float max_frequency,    
+    const bool gaussian_only,
+    const float alpha,
+    const float cutoff
+    ) {
+    
+    auto num_query_points = input.size(0);
+    auto num_gaussians = positions.size(0);
+
+    // Create output tensor and other tensors
+    auto output = torch::zeros({NUM_CHANNELS+1, input.size(0)}, input.device());
+    
+    // Sort query points and gaussians into 16x16 blocks
+    uint32_t* sorted_gaussian_indices;
+    uint32_t* blocks_gaussian_start_end_indices;
+    uint32_t num_gaussian_instances = sort_gaussians_to_blocks(
+        positions, scales,
+        make_float2(0.0f, 0.0f), make_float2(1.0f, 1.0f),
+        sorted_gaussian_indices, 
+        blocks_gaussian_start_end_indices);
+        
+    uint32_t* sorted_query_point_indices;
+    uint32_t* blocks_query_points_start_end_indices;
+    sort_query_points_to_blocks(
+        input, make_float2(0.0f, 0.0f), make_float2(1.0f, 1.0f),
+        sorted_query_point_indices, 
+        blocks_query_points_start_end_indices);
+
+    auto options = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
+    torch::Tensor sorted_gaussian_indices_tensor = torch::from_blob(sorted_gaussian_indices, {num_gaussian_instances}, options).clone();
+    torch::Tensor blocks_gaussian_start_end_indices_tensor = torch::from_blob(blocks_gaussian_start_end_indices, {BLOCKS_X*BLOCKS_Y, 2}, options).clone();
+    torch::Tensor sorted_query_point_indices_tensor = torch::from_blob(sorted_query_point_indices, {input.size(0)}, options).clone();
+    torch::Tensor blocks_query_points_start_end_indices_tensor = torch::from_blob(blocks_query_points_start_end_indices, {BLOCKS_X*BLOCKS_Y, 2}, options).clone();
+    
+    if(num_gaussian_instances == 0) return output;
+    
+
+    // Now sorted_gaussian_indices orders the indices of the original gaussian
+    // tensors in block order, so items are in block [0, 0, ..., 0, 1, 1, ..., 1, 2, ...]
+    // Similar with sorted_query_point_indices.
+    // cumulative_gaussians_per_block and cumulative_query_points_per_block are the
+    // indices for which block 0->1 (so each thread block knows where to stop)
+
+    // Finally evaluate results such that query points only evaulate with gaussians
+    // within the block.
+    dim3 numBlocks (16, 16);
+    periodic_primitives_kernel_vis_cuda_kernel<<<numBlocks, FORWARD_NUM_THREADS>>>(
+        input.size(0), positions.size(0), num_gaussian_instances,
+        max_frequency, gaussian_only, alpha, cutoff,
+        input.contiguous().data_ptr<float>(),
+        colors.contiguous().data_ptr<float>(),
+        positions.contiguous().data_ptr<float>(),
+        scales.contiguous().data_ptr<float>(),
+        rotations.contiguous().data_ptr<float>(),
+        wave_coefficients.contiguous().data_ptr<float>(),
+        wave_coefficient_indices.contiguous().data_ptr<int>(),
+        sorted_gaussian_indices,
+        blocks_gaussian_start_end_indices,
+        sorted_query_point_indices,
+        blocks_query_points_start_end_indices,
+        output.contiguous().data_ptr<float>()
+        );
+    cudaFree(sorted_gaussian_indices);
+    cudaFree(blocks_gaussian_start_end_indices);
+    cudaFree(sorted_query_point_indices);
+    cudaFree(blocks_query_points_start_end_indices);
+    return output;
 }
 
 

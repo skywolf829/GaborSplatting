@@ -62,6 +62,13 @@ class ImageDataset(torch.utils.data.Dataset):
     def shape(self):
         return self.img.shape
 
+    def forward(self, x):
+        samples = torch.nn.functional.grid_sample(self.img.permute(2, 0, 1)[None,...], 
+                                                  x[None,None,...]*2-1,
+                                                  mode="bilinear",
+                                                  align_corners=True)[0, :, 0, :].T
+        return samples.to(x.device)
+    
     def __getitem__(self, idx):
         points = torch.rand([self.opt['batch_size'], 2], 
                 dtype=torch.float32, device=self.opt['data_device'])*2 - 1

@@ -433,6 +433,13 @@ class PeriodicPrimitives2D(torch.nn.Module):
         heatmap = heatmap / heatmap.max()
         return heatmap
 
+    def vis_kernel(self, points, alpha=0.4, cutoff=2.1):
+        top_k_coeffs, top_k_indices = self.get_topk_waves()
+        return periodic_primitives.kernel_vis(points, 
+            torch.rand_like(self.gaussian_colors), self.gaussian_positions, self.gaussian_scales,
+            self.gaussian_rotations, top_k_coeffs, top_k_indices, 
+            self.opt['max_frequency'], self.opt['gaussian_only'], alpha, cutoff).T
+
     def prune_tensors_from_optimizer(self, mask):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:

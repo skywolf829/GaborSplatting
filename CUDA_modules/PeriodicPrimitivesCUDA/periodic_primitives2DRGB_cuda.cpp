@@ -22,6 +22,20 @@ std::vector<torch::Tensor> periodic_primitives_forward_cuda(
     const bool heatmap = false
 );
 
+torch::Tensor periodic_primitives_kernel_vis_cuda(
+    const torch::Tensor& input,                        // [N, n_dim]
+    const torch::Tensor& colors,                       // [M, n_chan]
+    const torch::Tensor& positions,                    // [M, n_dim]
+    const torch::Tensor& scales,                       // [M, n_dim]
+    const torch::Tensor& rotations,                    // [M, 1]
+    const torch::Tensor& wave_coefficients,            // [M, n_dim, n_freqs]
+    const torch::Tensor& wave_coefficient_indices,    
+    const float max_frequency,
+    const bool gaussian_only,
+    const float alpha,
+    const float cutoff
+);
+
 std::vector<torch::Tensor> periodic_primitives_backward_cuda(
     const torch::Tensor& grad_output,                  // [N, n_chan]
     const torch::Tensor& input,                        // [N, n_dim]
@@ -89,6 +103,51 @@ std::vector<torch::Tensor> periodic_primitives_forward(
         );
 }
 
+torch::Tensor periodic_primitives_kernel_vis(
+    const torch::Tensor& input,                        // [N, n_dim]
+    const torch::Tensor& colors,                       // [M, n_chan]
+    const torch::Tensor& positions,                    // [M, n_dim]
+    const torch::Tensor& scales,                       // [M, n_dim]
+    const torch::Tensor& rotations,                    // [M, 1]
+    const torch::Tensor& wave_coefficients,            // [M, n_dim, n_freqs]
+    const torch::Tensor& wave_coefficient_indices,     // [M, n_dim, n_freqs]
+    const float max_frequency,
+    const bool gaussian_only,
+    const float alpha,
+    const float cutoff
+    ) {
+    CHECK_INPUT(input);
+    CHECK_INPUT(colors);
+    CHECK_INPUT(positions);
+    CHECK_INPUT(scales);
+    CHECK_INPUT(rotations);
+    CHECK_INPUT(wave_coefficients);
+    CHECK_INPUT(wave_coefficient_indices);
+    /*
+    torch::Device device(torch::kCUDA);
+    torch::TensorOptions options(torch::kByte);
+
+    torch::Tensor queryPointBuffer = torch::empty({0}, options.device(device));
+    std::function<char*(size_t)> queryPointBufferFunct = resizeFunctional(queryPointBuffer);
+
+    torch::Tensor gaussiansBuffer = torch::empty({0}, options.device(device));
+    std::function<char*(size_t)> gaussiansBufferFunct = resizeFunctional(gaussiansBuffer);
+    */
+    return periodic_primitives_kernel_vis_cuda(
+        input, 
+        colors,
+        positions, 
+        scales,  
+        rotations,
+        wave_coefficients,
+        wave_coefficient_indices,
+        max_frequency,
+        gaussian_only,
+        alpha,
+        cutoff
+        );
+}
+
 std::vector<torch::Tensor> periodic_primitives_backward(
     const torch::Tensor& grad_output,                  // [N, n_chan]
     const torch::Tensor& input,                        // [N, n_dim]
@@ -139,5 +198,6 @@ std::vector<torch::Tensor> periodic_primitives_backward(
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("forward", &periodic_primitives_forward, "Periodic primitives forward (CUDA)");
+  m.def("kernel_vis", &periodic_primitives_kernel_vis, "Periodic primitives kernel visualization (CUDA)");
   m.def("backward", &periodic_primitives_backward, "Periodic primitives backward (CUDA)");
 }

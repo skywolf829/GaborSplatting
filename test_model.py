@@ -30,20 +30,39 @@ output_folder = os.path.join(project_folder_path, "output")
 save_folder = os.path.join(project_folder_path, "savedModels")
 
 def zoom_test(model, res, start_rect, end_rect, num_frames=128):
-    print("Zoom test")
+
     with torch.no_grad():
         imgs = []
         for i in tqdm(range(num_frames)):
-            pct = (i/(num_frames-1))
+            pct = ((i+1)/(num_frames))
             x_min = start_rect[0]*(1-pct) + end_rect[0]*pct
             x_max = start_rect[1]*(1-pct) + end_rect[1]*pct
             y_min = start_rect[2]*(1-pct) + end_rect[2]*pct
             y_max = start_rect[3]*(1-pct) + end_rect[3]*pct
-            g = [torch.linspace(x_min, x_max, res[0], device=model.device),
-                torch.linspace(y_min, y_max, res[1], device=model.device)]
+            g = [torch.linspace(x_min, x_max, res[0], device=model.opt['device']),
+                torch.linspace(y_min, y_max, res[1], device=model.opt['device'])]
             g = torch.stack(torch.meshgrid(g, indexing='ij'), dim=-1).flatten(0, -2)
-            out = model(g).reshape(res+[model.n_channels])#.flip(dims=[0,1])
-            imgs.append(to_img(out))
+            out = model.forward(g).reshape(res+[3])
+            im = to_img(out).swapaxes(0,1)
+            imgs.append(im)
+    return imgs
+
+def zoom_test_vis_kernels(model, res, start_rect, end_rect, num_frames=128):
+
+    with torch.no_grad():
+        imgs = []
+        for i in tqdm(range(num_frames)):
+            pct = ((i+1)/num_frames)
+            x_min = start_rect[0]*(1-pct) + end_rect[0]*pct
+            x_max = start_rect[1]*(1-pct) + end_rect[1]*pct
+            y_min = start_rect[2]*(1-pct) + end_rect[2]*pct
+            y_max = start_rect[3]*(1-pct) + end_rect[3]*pct
+            g = [torch.linspace(x_min, x_max, res[0], device=model.opt['device']),
+                torch.linspace(y_min, y_max, res[1], device=model.opt['device'])]
+            g = torch.stack(torch.meshgrid(g, indexing='ij'), dim=-1).flatten(0, -2)
+            out = model.vis_kernel(g).reshape(res+[4])
+            im = to_img(out).swapaxes(0,1)
+            imgs.append(im)
     return imgs
 
 def zoom_test_density(model, res, start_rect, end_rect, num_frames=128):
@@ -135,37 +154,29 @@ if __name__ == '__main__':
     #training_img = load_img(os.path.join(data_folder, img_name))
     #img_shape = list(training_img.shape)[0:2]
 
-    model_name = "MtCook_Gabor"
+    model_name = "Lighthouse_Gabor"
     location = os.path.join(save_folder, 
                        model_name)
     opt = load_options(location)
-    dataset = create_dataset(opt)
+    #opt['data_device'] = "cuda:0"
     model = load_model(opt,location)
-    quant_metrics(model, dataset)
+    #dataset = create_dataset(opt)
+    #quant_metrics(model, dataset)
 
-    '''
-    g_x = torch.arange(0, img_shape[0], dtype=torch.float32, device=device) / (img_shape[0]-1)
-    g_y = torch.arange(0, img_shape[1], dtype=torch.float32, device=device) / (img_shape[1]-1)
-    training_img_positions = torch.stack(torch.meshgrid([g_x, g_y], indexing='ij'), 
-                                        dim=-1).reshape(-1, 2).type(torch.float32)
+    #model_name = "GirlWithPearlEarring_GT"
 
-    x = training_img_positions
-    
+    #start_pluto, end_pluto = [0.0, 1.0, 0.0, 1.0], [0.67, 0.685, 0.36, 0.375]
+    #r = 0.3781
+    #start_tokyo, end_tokyo = [0.5-r/2, 0.5+r/2, 0, 1.], [0.3-0.06*r/2, 0.3+0.06*r/2, 0.33, 0.39]
+    r = 11608./8708.
+    #start_lighthouse, end_lighthouse = [0.5-r/2, 0.5+r/2, 0, 1.], [0.53-0.04*r/2, 0.53+0.04*r/2, 0.48, 0.52]
+    #r = 6566./15490.
+    #start_mtcook, end_mtcook = [0.5-r/2, 0.5+r/2, 0, 1.], [0.36-0.07*r/2, 0.36+0.07*r/2, 0.26, 0.33]
+    #r = 5769./14586.
+    #start_aalesund, end_aalesund = [0.5-r/2, 0.5+r/2, 0, 1.], [0.84-0.1*r/2, 0.84+0.1*r/2, 0.75, 0.85]
+    #r = 36000./50000.
+    #start_pearl, end_pearl = [0, 1., 0.5-r/2, 0.5+r/2], [0.77, 0.83, 0.84-0.06*r/2, 0.84+0.06*r/2]
 
-    xmin = x.min(dim=0).values
-    xmax = x.max(dim=0).values
-    g = [torch.linspace(xmin[i], xmax[i], img_shape[i], device=device) for i in range(xmin.shape[0])]
-    g = torch.stack(torch.meshgrid(g, indexing='ij'), dim=-1).flatten(0, -2)
-    
-    profiler_test(model)
-    throughout_test(model)
-    start = [xmin[0], xmax[0], xmin[1], xmax[1]]
-    #end = [0.15, 0.25, 0.85, 0.95]
-    end = [0.45, 0.55, 0.45, 0.55]
-
-    imgs = zoom_test(model, img_shape, start, end)
-    imageio.imwrite(os.path.join("./output", f"{model_name}_zoom.gif"), imgs)
-
-    imgs = zoom_test_density(model, img_shape, start, end)
-    imageio.imwrite(os.path.join("./output", f"{model_name}_zoom_density.gif"), imgs)
-    '''
+    imgs = zoom_test_vis_kernels(model, [2048,1024], [0.18-(0.1*r/2), 0.18+(0.1*r/2), 0.45, 0.55], [0.18-(0.1*r/2), 0.18+(0.1*r/2), 0.45, 0.55], num_frames=1)
+    dest = os.path.join("./output", f"{model_name}_zoom_kernels.png")
+    imageio.imwrite(dest, imgs[0], fps=30, quality=10)

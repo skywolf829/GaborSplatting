@@ -27,3 +27,5 @@ dependencies:
       - torchmetrics
       - lpips
       - git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch
+      - av
+      - imageio[ffmpeg]
