@@ -144,6 +144,9 @@ def quant_metrics(model, dataset):
         print(f"Final LPIPS: {lpips_sum/iters:0.04f}")
         torch.cuda.empty_cache()
 
+def count_params(model):
+    print(model.effective_param_count())
+
 if __name__ == '__main__':
     
     torch.random.manual_seed(42)
@@ -154,21 +157,21 @@ if __name__ == '__main__':
     #training_img = load_img(os.path.join(data_folder, img_name))
     #img_shape = list(training_img.shape)[0:2]
 
-    model_name = "Lighthouse_Gabor"
+    model_name = "GirlWithPearlEarring_Gabor"
     location = os.path.join(save_folder, 
                        model_name)
     opt = load_options(location)
-    #opt['data_device'] = "cuda:0"
+    opt['data_device'] = "cpu"
     model = load_model(opt,location)
-    #dataset = create_dataset(opt)
-    #quant_metrics(model, dataset)
+    dataset = create_dataset(opt)
+    quant_metrics(model, dataset)
 
     #model_name = "GirlWithPearlEarring_GT"
 
     #start_pluto, end_pluto = [0.0, 1.0, 0.0, 1.0], [0.67, 0.685, 0.36, 0.375]
     #r = 0.3781
     #start_tokyo, end_tokyo = [0.5-r/2, 0.5+r/2, 0, 1.], [0.3-0.06*r/2, 0.3+0.06*r/2, 0.33, 0.39]
-    r = 11608./8708.
+    #r = 11608./8708.
     #start_lighthouse, end_lighthouse = [0.5-r/2, 0.5+r/2, 0, 1.], [0.53-0.04*r/2, 0.53+0.04*r/2, 0.48, 0.52]
     #r = 6566./15490.
     #start_mtcook, end_mtcook = [0.5-r/2, 0.5+r/2, 0, 1.], [0.36-0.07*r/2, 0.36+0.07*r/2, 0.26, 0.33]
@@ -177,6 +180,7 @@ if __name__ == '__main__':
     #r = 36000./50000.
     #start_pearl, end_pearl = [0, 1., 0.5-r/2, 0.5+r/2], [0.77, 0.83, 0.84-0.06*r/2, 0.84+0.06*r/2]
 
-    imgs = zoom_test_vis_kernels(model, [2048,1024], [0.18-(0.1*r/2), 0.18+(0.1*r/2), 0.45, 0.55], [0.18-(0.1*r/2), 0.18+(0.1*r/2), 0.45, 0.55], num_frames=1)
-    dest = os.path.join("./output", f"{model_name}_zoom_kernels.png")
-    imageio.imwrite(dest, imgs[0], fps=30, quality=10)
+    #imgs = zoom_test_vis_kernels(model, [2048,1024], [0.18-(0.1*r/2), 0.18+(0.1*r/2), 0.45, 0.55], [0.18-(0.1*r/2), 0.18+(0.1*r/2), 0.45, 0.55], num_frames=1)
+    #dest = os.path.join("./output", f"{model_name}_zoom_kernels.png")
+    #imageio.imwrite(dest, imgs[0], fps=30, quality=10)
+
