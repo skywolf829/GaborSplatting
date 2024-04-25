@@ -64,7 +64,7 @@ class ImageDataset(torch.utils.data.Dataset):
 
     def forward(self, x):
         samples = torch.nn.functional.grid_sample(self.img.permute(2, 0, 1)[None,...], 
-                                                  x[None,None,...]*2-1,
+                                                  x[None,None,...].to(self.opt['data_device'])*2-1,
                                                   mode="bilinear",
                                                   align_corners=True)[0, :, 0, :].T
         return samples.to(x.device)

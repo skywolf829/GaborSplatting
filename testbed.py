@@ -427,7 +427,6 @@ def thing15():
      imageio.imwrite("rotated_fft.gif", fourier_imgs)
      imageio.imwrite("PSD.png", ((PSD_rows/PSD_rows.max())*255).astype(np.uint8))
 
-
 def thing16():
      h = 256
      w = 256
@@ -475,7 +474,6 @@ def thing16():
      imageio.imwrite("rotated_fft.gif", fourier_imgs)
      #imageio.imwrite("PSD.png", ((PSD_rows/PSD_rows.max())*255).astype(np.uint8))
 
-
 def thing17():
      
      mean = np.random.rand(2)
@@ -505,4 +503,49 @@ def thing17():
      
      plt.show()
 
-thing17()
+def thing18():
+     x = np.linspace(-10., 10., 400)[None,:].repeat(400, axis=0)
+     y = np.linspace(-10., 10., 400)[:,None].repeat(400, axis=1)
+
+     g = np.stack([x,y], axis=-1)
+     theta2 = np.pi*150/180
+     S = [1.5, 1]
+     R2 = np.array([[S[0]*np.cos(theta2), -np.sin(theta2)],[np.sin(theta2), S[1]*np.cos(theta2)]]).reshape(2, 2)
+     g = g @ R2
+     w2 = np.cos(2*g)[...,0]
+     d = np.exp(-np.linalg.norm(g, axis=-1))
+     comp = w2*d
+
+     out_im = np.zeros([400,400,4])
+     out_im[:,:,0:3] = np.abs(comp)[:,:,None] * np.array([255, 0, 0])[None,None,:]
+     out_im[:,:,3] = np.abs(comp) *255
+     out_im = out_im.astype(np.uint8)
+     plt.imshow(comp, cmap="seismic")
+     plt.clim(-1,1)
+     plt.show()
+     import imageio.v3 as iio
+     iio.imwrite("Gabor.png", out_im)
+
+def thing19():
+     x = np.linspace(-10., 10., 400)[None,:].repeat(400, axis=0)
+     y = np.linspace(-10., 10., 400)[:,None].repeat(400, axis=1)
+
+     g = np.stack([x,y], axis=-1)
+     theta2 = np.pi*70/180
+     S = [1.8, 1]
+     R2 = np.array([[S[0]*np.cos(theta2), -np.sin(theta2)],[np.sin(theta2), S[1]*np.cos(theta2)]]).reshape(2, 2)
+     g = g @ R2
+     d = np.exp(-np.linalg.norm(g, axis=-1))
+     comp = d
+
+     out_im = np.zeros([400,400,4])
+     out_im[:,:,0:3] = np.abs(comp)[:,:,None] * np.array([255, 0, 0])[None,None,:]
+     out_im[:,:,3] = np.abs(comp) *255
+     out_im = out_im.astype(np.uint8)
+     plt.imshow(comp, cmap="seismic")
+     plt.clim(-1,1)
+     plt.show()
+     import imageio.v3 as iio
+     iio.imwrite("Gaussian.png", out_im)
+
+thing18()
